@@ -312,6 +312,7 @@ arefine/
 - 最初の観点の名前は `lint`。ディレクトリは `refiners/lint/`、config.yaml のキーも `lint` にする
 - AGENTS.md・CLAUDE.md の各ルールに guidance ID を振る作業は M2 に含める
 - LLM の呼び出し（normalize の2段目と観点の実行）には、ひとまず sonnet を使う。レポートの中身を見て変える
+- 設定ファイル（config.yaml・refiner.yaml）は YAML で書く。手で直す設定なのでコメントを書けることを優先した。JSON はコメントを書けず、JSONC と TOML は YAML と同じく読み込みに依存が要るうえ、TOML は周りのツールで使う例が少ない。エディタの補完は、YAML でも `# yaml-language-server: $schema=…` で JSON Schema を指定すれば使える
 - 1回の実行で LLM に使う金額の上限は、既定で1ドル。config.yaml の `budget_usd` で変えられる（「設定」を参照）
 - リポジトリが分からない候補（`_unknown/`）は normalize しない（「処理の流れ」を参照）
 - guidance ID は各リポジトリの AGENTS.md のルールに `[G-001]` の形で振る（「guidance ID の振り方」を参照）
