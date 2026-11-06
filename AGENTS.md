@@ -15,6 +15,9 @@
 - observation は refiner に依存しない共通形式。refiner 固有の情報は refiner 側の状態に持つ
 - エージェント固有の処理（ログ形式の読み取り、hook）は sources/ と plugin/ に閉じ込める
 - refiner はすべて既定で無効。有効化は設定ファイルで行う
+- ログや設定など外から読む JSON は、zod のスキーマを通してから使う
+- 型アサーション（`as`）と non-null アサーション（`!`）は使わない。型注釈・`satisfies`・zod・条件分岐で型を付ける。`as const` だけは使ってよい
+- どうしても要るときは、`// oxlint-disable-next-line typescript/consistent-type-assertions -- 理由`（`!` なら typescript/no-non-null-assertion）で理由を書いて1行だけ外す
 
 ## データの扱い
 - 生のセッションログ、そこから取ったコード片をコミットしない

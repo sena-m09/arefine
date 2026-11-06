@@ -1,10 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { z } from "zod";
 import { collect } from "../src/pipeline/collect.ts";
 import { repoFromRemoteUrl } from "../src/pipeline/repo.ts";
+
+const Candidate = z.object({ text: z.string() });
 
 let root: string;
 let env: NodeJS.ProcessEnv;
@@ -30,7 +33,7 @@ function candidateTexts(repoDirName: string): string[] {
   return readFileSync(file, "utf8")
     .trim()
     .split("\n")
-    .map((line) => (JSON.parse(line) as { text: string }).text);
+    .map((line) => Candidate.parse(JSON.parse(line)).text);
 }
 
 beforeEach(() => {
@@ -81,6 +84,15 @@ describe("arefine collect", () => {
     collect(env);
 
     expect(candidateTexts("acme__widget")).toEqual(["途中で読まれた発話"]);
+  });
+
+  test("読み込み位置の記録が壊れていたら、発話を重複して追記する前に止める", () => {
+    appendFileSync(log, human("1つ目", repoCwd));
+    collect(env);
+    writeFileSync(join(root, "home", "cursors.json"), "{ broken");
+
+    expect(() => collect(env)).toThrow("cursors.json を読めません");
+    expect(candidateTexts("acme__widget")).toEqual(["1つ目"]);
   });
 });
 

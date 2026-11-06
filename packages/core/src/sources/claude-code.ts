@@ -1,6 +1,8 @@
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
+import { parseJson } from "../pipeline/jsonl.ts";
 
 export type Utterance = {
   id: string;
@@ -10,19 +12,30 @@ export type Utterance = {
   text: string;
 };
 
-type ContentBlock = { type?: string; text?: string };
+export type ParsedLine =
+  | { kind: "utterance"; utterance: Utterance }
+  | { kind: "unreadable" }
+  | { kind: "skip" };
 
-type SessionRecord = {
-  type?: string;
-  uuid?: string;
-  timestamp?: string;
-  sessionId?: string;
-  cwd?: string;
-  isMeta?: boolean;
-  isSidechain?: boolean;
-  origin?: { kind?: string } | null;
-  message?: { content?: string | ContentBlock[] };
-};
+const HumanMarker = z.object({
+  type: z.literal("user"),
+  origin: z.object({ kind: z.literal("human") }),
+  isMeta: z.boolean().optional(),
+  isSidechain: z.boolean().optional(),
+});
+
+const HumanRecord = z.object({
+  uuid: z.string(),
+  timestamp: z.string(),
+  sessionId: z.string(),
+  cwd: z.string(),
+  message: z.object({
+    content: z.union([
+      z.string(),
+      z.array(z.object({ type: z.string(), text: z.string().optional() })),
+    ]),
+  }),
+});
 
 export function claudeProjectsDir(env: NodeJS.ProcessEnv): string {
   return join(env["CLAUDE_CONFIG_DIR"] ?? join(homedir(), ".claude"), "projects");
@@ -47,39 +60,36 @@ export function listSessionLogs(projectsDir: string): string[] {
   });
 }
 
-export function toUtterance(value: unknown): Utterance | undefined {
-  const record = value as SessionRecord;
-  if (record.type !== "user" || record.isMeta || record.isSidechain) {
-    return undefined;
+export function parseLine(line: string): ParsedLine {
+  const value = parseJson(line);
+  const marker = HumanMarker.safeParse(value);
+  if (!marker.success || marker.data.isMeta || marker.data.isSidechain) {
+    return { kind: "skip" };
   }
-  if (record.origin?.kind !== "human") {
-    return undefined;
-  }
-  const text = textOf(record.message?.content).trim();
-  if (text === "" || text.startsWith("<command-")) {
-    return undefined;
-  }
-  if (!record.uuid || !record.timestamp || !record.sessionId || !record.cwd) {
-    return undefined;
-  }
-  return {
-    id: record.uuid,
-    at: record.timestamp,
-    session: record.sessionId,
-    cwd: record.cwd,
-    text,
-  };
-}
 
-function textOf(content: string | ContentBlock[] | undefined): string {
-  if (typeof content === "string") {
-    return content;
+  const record = HumanRecord.safeParse(value);
+  if (!record.success) {
+    return { kind: "unreadable" };
   }
-  if (Array.isArray(content)) {
-    return content
-      .filter((block) => block.type === "text" && typeof block.text === "string")
-      .map((block) => block.text)
-      .join("\n");
+
+  const { content } = record.data.message;
+  const text = (
+    typeof content === "string"
+      ? content
+      : content.flatMap((block) => (block.type === "text" && block.text !== undefined ? [block.text] : [])).join("\n")
+  ).trim();
+  if (text === "" || text.startsWith("<command-")) {
+    return { kind: "skip" };
   }
-  return "";
+
+  return {
+    kind: "utterance",
+    utterance: {
+      id: record.data.uuid,
+      at: record.data.timestamp,
+      session: record.data.sessionId,
+      cwd: record.data.cwd,
+      text,
+    },
+  };
 }

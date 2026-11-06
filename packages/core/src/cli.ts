@@ -25,8 +25,18 @@ const [command] = positionals;
 if (values.help || command === undefined) {
   process.stdout.write(USAGE);
 } else if (command === "collect") {
-  const { logs, candidates } = collect(process.env);
-  process.stdout.write(`${logs} 件のセッションログから ${candidates} 件の発話を取り出しました。\n`);
+  try {
+    const { logs, candidates, unreadable } = collect(process.env);
+    process.stdout.write(`${logs} 件のセッションログから ${candidates} 件の発話を取り出しました。\n`);
+    if (unreadable > 0) {
+      process.stderr.write(
+        `人間の発話のうち ${unreadable} 件は形式を読めず、取り出していません。\nClaude Code のログ形式が変わった可能性があります。sources/claude-code.ts のスキーマを確認してください。\n`,
+      );
+    }
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  }
 } else {
   process.stderr.write(`不明なコマンドです: ${command}\n使えるコマンドは arefine --help で確認してください。\n`);
   process.exitCode = 1;
