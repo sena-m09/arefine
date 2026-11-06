@@ -1,0 +1,112 @@
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { z } from "zod";
+import { arefineHome, repoDir } from "../config/paths.ts";
+import { claudeProjectsDir, listSessionLogs, parseLine } from "../sources/claude-code.ts";
+import type { Utterance, UtteranceKind } from "../sources/claude-code.ts";
+import { parseJson, readNewLines } from "./jsonl.ts";
+import { resolveRepo } from "./repo.ts";
+
+export type Candidate = {
+  id: string;
+  kind: UtteranceKind;
+  at: string;
+  source: "claude-session";
+  repo: string | null;
+  cwd: string;
+  text: string;
+  ref: { session: string; log: string };
+};
+
+const Cursors = z.record(z.string(), z.number().int().nonnegative());
+type Cursors = z.infer<typeof Cursors>;
+
+export type CollectSummary = {
+  logs: number;
+  candidates: number;
+  unreadable: number;
+};
+
+type LogDelta = {
+  log: string;
+  nextOffset: number;
+  utterances: Utterance[];
+  unreadable: number;
+};
+
+export function collect(env: NodeJS.ProcessEnv): CollectSummary {
+  const home = arefineHome(env);
+  const cursorsFile = join(home, "cursors.json");
+  const cursors = readCursors(cursorsFile);
+
+  const deltas = listSessionLogs(claudeProjectsDir(env))
+    .map((log) => readLogDelta(log, cursors[log] ?? 0))
+    .filter((delta) => delta.nextOffset !== (cursors[delta.log] ?? 0));
+
+  const utterances = deltas.flatMap((delta) => delta.utterances.map((utterance) => ({ utterance, log: delta.log })));
+  const repoByCwd = new Map(
+    [...new Set(utterances.map(({ utterance }) => utterance.cwd))].map((cwd) => [cwd, resolveRepo(cwd)]),
+  );
+  const candidates = utterances.map(({ utterance, log }) =>
+    toCandidate(utterance, log, repoByCwd.get(utterance.cwd) ?? null),
+  );
+
+  for (const [dir, group] of Map.groupBy(candidates, (candidate) => repoDir(home, candidate.repo))) {
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, "candidates.jsonl"), group.map((candidate) => `${JSON.stringify(candidate)}\n`).join(""));
+  }
+  writeCursors(cursorsFile, {
+    ...cursors,
+    ...Object.fromEntries(deltas.map((delta) => [delta.log, delta.nextOffset])),
+  });
+
+  return {
+    logs: deltas.length,
+    candidates: candidates.length,
+    unreadable: deltas.reduce((sum, delta) => sum + delta.unreadable, 0),
+  };
+}
+
+function readLogDelta(log: string, offset: number): LogDelta {
+  const { lines, nextOffset } = readNewLines(log, offset);
+  const parsed = lines.map(parseLine);
+  return {
+    log,
+    nextOffset,
+    utterances: parsed.flatMap((line) => (line.kind === "utterance" ? [line.utterance] : [])),
+    unreadable: parsed.filter((line) => line.kind === "unreadable").length,
+  };
+}
+
+function toCandidate(utterance: Utterance, log: string, repo: string | null): Candidate {
+  return {
+    id: utterance.id,
+    kind: utterance.kind,
+    at: utterance.at,
+    source: "claude-session",
+    repo,
+    cwd: utterance.cwd,
+    text: utterance.text,
+    ref: { session: utterance.session, log },
+  };
+}
+
+function readCursors(file: string): Cursors {
+  if (!existsSync(file)) {
+    return {};
+  }
+  const cursors = Cursors.safeParse(parseJson(readFileSync(file, "utf8")));
+  if (!cursors.success) {
+    throw new Error(
+      `${file} を読めません。\nこのファイルを削除すると、セッションログを最初から読み直します。そのときは、取り出し済みの発話が candidates.jsonl に重複して追記されます。`,
+    );
+  }
+  return cursors.data;
+}
+
+function writeCursors(file: string, cursors: Cursors): void {
+  mkdirSync(join(file, ".."), { recursive: true });
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(cursors, null, 2)}\n`);
+  renameSync(tmp, file);
+}

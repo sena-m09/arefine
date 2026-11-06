@@ -1,0 +1,34 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error"
+  },
+  "options": {
+    "typeAware": true
+  },
+  "jsPlugins": [
+    {
+      "name": "local",
+      "specifier": "./tools/lint/local.ts"
+    }
+  ],
+  "rules": {
+    "typescript/consistent-type-assertions": [
+      "error",
+      {
+        "assertionStyle": "never"
+      }
+    ],
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "local/no-let": "error",
+    "local/for-of-only": "error",
+    "unicorn/no-array-for-each": "error",
+    "oxc/no-accumulating-spread": "error"
+  }
+}
