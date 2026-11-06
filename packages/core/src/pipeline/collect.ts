@@ -3,12 +3,13 @@ import { join } from "node:path";
 import { z } from "zod";
 import { arefineHome, repoDir } from "../config/paths.ts";
 import { claudeProjectsDir, listSessionLogs, parseLine } from "../sources/claude-code.ts";
-import type { Utterance } from "../sources/claude-code.ts";
+import type { Utterance, UtteranceKind } from "../sources/claude-code.ts";
 import { parseJson, readNewLines } from "./jsonl.ts";
 import { resolveRepo } from "./repo.ts";
 
 export type Candidate = {
   id: string;
+  kind: UtteranceKind;
   at: string;
   source: "claude-session";
   repo: string | null;
@@ -80,6 +81,7 @@ function readLogDelta(log: string, offset: number): LogDelta {
 function toCandidate(utterance: Utterance, log: string, repo: string | null): Candidate {
   return {
     id: utterance.id,
+    kind: utterance.kind,
     at: utterance.at,
     source: "claude-session",
     repo,

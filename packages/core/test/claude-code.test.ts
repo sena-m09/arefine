@@ -15,18 +15,22 @@ const humanRecord = {
 };
 
 describe("Claude Code のセッションログ", () => {
-  test("人間が打った発話だけを取り出し、ツールの結果・hook・通知・サブエージェント・slash command は含めない", () => {
+  test("人間が打った発話と AskUserQuestion への回答だけを取り出し、ツールの結果・hook・通知・サブエージェント・slash command は含めない", () => {
     const lines = readFileSync(fixture, "utf8").trim().split("\n");
 
-    const texts = lines.flatMap((line) => {
+    const utterances = lines.flatMap((line) => {
       const parsed = parseLine(line);
-      return parsed.kind === "utterance" ? [parsed.utterance.text] : [];
+      return parsed.kind === "utterance" ? [{ kind: parsed.utterance.kind, text: parsed.utterance.text }] : [];
     });
 
-    expect(texts).toEqual([
-      "コンポーネントで fetch を直接呼ばないで",
-      '<pasted_content id="ab12">\nエラーログ\n</pasted_content>\nこれを直して',
-      "この余白を詰めて",
+    expect(utterances).toEqual([
+      { kind: "prompt", text: "コンポーネントで fetch を直接呼ばないで" },
+      { kind: "prompt", text: '<pasted_content id="ab12">\nエラーログ\n</pasted_content>\nこれを直して' },
+      { kind: "prompt", text: "この余白を詰めて" },
+      {
+        kind: "answer",
+        text: "質問: テストツールはどれにしますか？\n回答: vitest\nメモ: 既存プロジェクトと揃えて\n\n質問: lint はどれにしますか？\n回答: ESLint は使わない",
+      },
     ]);
   });
 
