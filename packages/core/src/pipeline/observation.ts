@@ -17,6 +17,7 @@ export const Observation = z.object({
   cwd: z.string(),
   guidance_id: z.string().nullable(),
   summary: z.string(),
+  stated_as_rule: z.boolean().default(false),
   evidence: Evidence.optional(),
   ref: z.object({ candidate: z.string().nullable(), session: z.string(), log: z.string().nullable() }),
 });

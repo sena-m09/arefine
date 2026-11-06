@@ -109,6 +109,7 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
   "cwd": "/Users/me/works/repo",
   "guidance_id": null,
   "summary": "コンポーネントで fetch を直接呼ばない",
+  "stated_as_rule": false,
   "ref": { "candidate": "1f0c…", "session": "…", "log": "/Users/me/.claude/projects/…/….jsonl" }
 }
 ```
@@ -124,6 +125,7 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
   "cwd": "/Users/me/works/repo",
   "guidance_id": "G-006",
   "summary": "型アサーションを使わない",
+  "stated_as_rule": false,
   "evidence": { "violation": "const user = data as User;", "fix": "const user = User.parse(data);" },
   "ref": { "candidate": null, "session": "…", "log": null }
 }
@@ -134,6 +136,7 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 - `cwd`：発話したときの作業フォルダ。観点がリポジトリのファイルを読むときに使う
 - `guidance_id`：normalize では `null` にする。どの guidance への指摘かは、AGENTS.md を読める観点の側で結びつける。セルフレビューが ID を引用していれば、それを入れる
 - `summary`：指示の中身を「〜しない」「〜する」の形で書いた1文
+- `stated_as_rule`：人が「今後は」「必ず」「二度と」「覚えておいて」「ルールにして」のように、これから先も守るルールとして言い切ったなら `true`。normalize の2段目で、発話の言い方から判定する。指示がどれだけ重要かでは判定しない。このフィールドがない古い行は `false` として読む。言い切りは人の発話の性質なので、セルフレビューからの observation は常に `false` にする
 - `evidence`：違反したコード（`violation`）と、直したコード（`fix`、なければ `null`）。セルフレビューが渡したときだけ持つ。発話からは分からないので、セッションログからの observation には付けない
 - `ref`：元の記録への参照。セルフレビューには元の候補とログがないので、`candidate` と `log` は `null`
 - observation は観点に依存しない共通形式にする。観点固有の情報はここに足さない
@@ -308,7 +311,9 @@ schedule: weekly
 
 `level` は `guidance` / `check` / `enforce`、`decision.result` は `existing-rule` / `custom-rule` / `not-mechanizable` / `pending` の4値。
 
-M2 の lint 観点は、registry.json を持たずに、渡された observation だけで判定する。そのため `threshold` は1回の dispatch で渡した observation の中での件数になり、実行をまたいだ件数は数えない。`threshold` に届かない指示も、レポートの「様子を見る指示」に一覧で残す。実行をまたいだ件数は、M3 で registry.json を入れるときに数える。
+M2 の lint 観点は、registry.json を持たずに、渡された observation だけで判定する。そのため `threshold` は1回の dispatch で渡した observation の中での件数になり、実行をまたいだ件数は数えない。`threshold` に届かない指示も、レポートの「様子を見る指示」に一覧で残す。
+
+ただし、`stated_as_rule` が `true` の observation を含む指示は、1件でも提案にする。人がルールとして言い切った指示は、1回しか出ていなくても重いことが多い。それなのに件数だけで決めると、様子を見る指示の一覧に1回載るだけで、読み逃すと残らない。指示がどれだけ重要かを LLM に採点させるとぶれやすいので、まずは発話の言い方から判定できる言い切りを根拠にする。実行をまたいだ件数は、M3 で registry.json を入れるときに数える。
 
 ### guidance ID の振り方
 
@@ -388,6 +393,7 @@ arefine/
 - 定期実行の頻度は既定で1日1回。config.yaml の `schedule` で `weekly` にも変えられる（「定期実行」を参照）
 - 定期実行は launchd で行う。Label はほかの人に配る前提で、ほかのジョブと名前がぶつからない逆ドメインの形 `com.github.sena-m09.arefine.run` にする。plist は `~/Library/LaunchAgents/com.github.sena-m09.arefine.run.plist`、出力は `~/.arefine/logs/run.log` に置く。登録は利用者が `launchctl bootstrap` で行う（「定期実行」を参照）
 - collect と run は `~/.arefine/run.lock` で同時に1つしか動かさない（「定期実行」を参照）
+- 人がルールとして言い切った指示は、件数が `threshold` に届いていなくても lint 観点が提案にする。言い切りかどうかは normalize で observation の `stated_as_rule` に残す（「最初の観点：lint 化」を参照）
 
 ## 未決事項
 

@@ -56,6 +56,7 @@ describe("arefine observe", () => {
         cwd: repo,
         guidance_id: "G-006",
         summary: "型アサーションを使わない",
+        stated_as_rule: false,
         evidence: { violation: "const user = data as User;", fix: null },
       }),
       expect.objectContaining({ guidance_id: null, summary: "テスト名に実装の関数名を書かない" }),

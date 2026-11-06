@@ -14,6 +14,7 @@ const CONTRACT = `## aRefine から渡すものと返してほしいもの
 
 入力には、対象のリポジトリ名、作業フォルダ、この観点の設定、observation の一覧が入っています。
 observation は、人間が AI に出した修正指示を 1 件ずつまとめたものです。
+stated_as_rule が true の observation は、人間が「今後は」「必ず」のように、これから先も守るルールとして言い切った指示です。
 作業フォルダがあるときは、Read・Grep・Glob でそのリポジトリのファイルを読めます。ファイルは書き換えません。
 
 提案は proposals に入れます。
