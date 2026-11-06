@@ -6,7 +6,7 @@ import { claudeLlm } from "./llm/claude.ts";
 import { collect } from "./pipeline/collect.ts";
 import type { CollectSummary } from "./pipeline/collect.ts";
 import { run } from "./pipeline/run.ts";
-import type { RunSummary } from "./pipeline/run.ts";
+import type { RunProgress, RunSummary } from "./pipeline/run.ts";
 
 const USAGE = `arefine - コーディングエージェントのセッションログから人間の指摘を拾い、改善提案を出す
 
@@ -39,7 +39,16 @@ if (values.help || command === undefined) {
   process.exitCode = 1;
 } else if (command === "run") {
   const repo = typeof values.repo === "string" ? values.repo : undefined;
-  guard(() => printRun(run(process.env, { llm: claudeLlm, now: new Date(), ...(repo === undefined ? {} : { repo }) })));
+  guard(() =>
+    printRun(
+      run(process.env, {
+        llm: claudeLlm,
+        now: new Date(),
+        onProgress: printProgress,
+        ...(repo === undefined ? {} : { repo }),
+      }),
+    ),
+  );
 } else {
   process.stderr.write(`不明なコマンドです: ${command}\n使えるコマンドは arefine --help で確認してください。\n`);
   process.exitCode = 1;
@@ -61,6 +70,16 @@ function printCollected({ logs, candidates, unreadable }: CollectSummary): void 
       `人間の発話のうち ${unreadable} 件は形式を読めず、取り出していません。\nClaude Code のログ形式が変わった可能性があります。sources/claude-code.ts のスキーマを確認してください。\n`,
     );
   }
+}
+
+function printProgress(progress: RunProgress): void {
+  const message =
+    progress.phase === "collect"
+      ? "セッションログを読んでいます…"
+      : progress.phase === "normalize"
+        ? `${progress.repo}: 発話から修正指示を拾っています（${progress.done}/${progress.total} 件済み）`
+        : `${progress.repo}: 観点 ${progress.refiner} に修正指示 ${progress.observations} 件を渡して、提案を待っています（数分かかることがあります）`;
+  process.stderr.write(`${message}\n`);
 }
 
 function printRun(summary: RunSummary): void {

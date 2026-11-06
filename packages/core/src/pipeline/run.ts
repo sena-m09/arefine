@@ -30,14 +30,22 @@ export type RunSummary = {
   repoNotFound: { requested: string; known: string[] } | null;
 };
 
+export type RunProgress =
+  | { phase: "collect" }
+  | { phase: "normalize"; repo: string; done: number; total: number }
+  | { phase: "dispatch"; repo: string; refiner: string; observations: number };
+
 export type RunOptions = {
   llm: Llm;
   now: Date;
+  onProgress?: (progress: RunProgress) => void;
   repo?: string;
   builtinRefinersDir?: string;
 };
 
 export function run(env: NodeJS.ProcessEnv, options: RunOptions): RunSummary {
+  const notify = options.onProgress ?? (() => {});
+  notify({ phase: "collect" });
   const collected = collect(env);
   const home = arefineHome(env);
   const config = loadConfig(home);
@@ -64,10 +72,14 @@ export function run(env: NodeJS.ProcessEnv, options: RunOptions): RunSummary {
 
   const repos: RepoRun[] = [];
   for (const { dir, repo } of targets) {
-    const normalized = normalizeRepo(dir, repo, options.llm, budget);
+    const normalized = normalizeRepo(dir, repo, options.llm, budget, (done, total) =>
+      notify({ phase: "normalize", repo, done, total }),
+    );
     const dispatched = refiners.map((refiner) => ({
       refiner: refiner.name,
-      ...dispatchRepo(dir, repo, refiner, options.llm, budget),
+      ...dispatchRepo(dir, repo, refiner, options.llm, budget, (observations) =>
+        notify({ phase: "dispatch", repo, refiner: refiner.name, observations }),
+      ),
     }));
     const report = writeReport(
       dir,

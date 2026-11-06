@@ -42,7 +42,14 @@ export type DispatchResult = {
   advanceTo: number | null;
 };
 
-export function dispatchRepo(dir: string, repo: string, refiner: Refiner, llm: Llm, budget: Budget): DispatchResult {
+export function dispatchRepo(
+  dir: string,
+  repo: string,
+  refiner: Refiner,
+  llm: Llm,
+  budget: Budget,
+  onStart: (observations: number) => void = () => {},
+): DispatchResult {
   const file = observationsFile(dir);
   const empty = { observations: 0, proposals: [], pending: 0, costUsd: 0, error: null, advanceTo: null };
   if (!existsSync(file)) {
@@ -69,6 +76,7 @@ export function dispatchRepo(dir: string, repo: string, refiner: Refiner, llm: L
   }
 
   const cwd = observations.toReversed().find((observation) => existsSync(observation.cwd))?.cwd;
+  onStart(observations.length);
   const result = llm({
     system: `${refiner.skill}\n\n${CONTRACT}`,
     prompt: [

@@ -37,7 +37,13 @@ export type NormalizeResult = {
 
 type BatchResult = { ok: true; observations: Observation[]; costUsd: number } | { ok: false; error: string; costUsd: number };
 
-export function normalizeRepo(dir: string, repo: string, llm: Llm, budget: Budget): NormalizeResult {
+export function normalizeRepo(
+  dir: string,
+  repo: string,
+  llm: Llm,
+  budget: Budget,
+  onBatch: (done: number, total: number) => void = () => {},
+): NormalizeResult {
   const file = join(dir, "candidates.jsonl");
   if (!existsSync(file)) {
     return { candidates: 0, observations: 0, pending: 0, costUsd: 0, error: null };
@@ -49,10 +55,11 @@ export function normalizeRepo(dir: string, repo: string, llm: Llm, budget: Budge
 
   const done: { size: number; observations: number; costUsd: number }[] = [];
   const failures: string[] = [];
-  for (const batch of batches) {
+  for (const [i, batch] of batches.entries()) {
     if (budget.exhausted) {
       break;
     }
+    onBatch(i * BATCH_SIZE, entries.length);
     const result = normalizeBatch(batch, repo, llm, budget.limitUsd);
     budget.charge(result.costUsd);
     if (!result.ok) {

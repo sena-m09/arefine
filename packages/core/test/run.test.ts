@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { Llm, LlmRequest, LlmResult } from "../src/llm/claude.ts";
 import { BUILTIN_REFINERS_DIR } from "../src/pipeline/refiners.ts";
 import { run } from "../src/pipeline/run.ts";
+import type { RunOptions, RunProgress } from "../src/pipeline/run.ts";
 
 const PromptCandidates = z.array(z.object({ id: z.string(), text: z.string() }));
 const ObservationLine = z.object({ id: z.string(), summary: z.string(), source: z.string() });
@@ -99,7 +100,7 @@ function setup(options: { config?: string; costUsd?: number } = {}) {
         : [],
     reports: () => (existsSync(join(repoDir, "reports")) ? readdirSync(join(repoDir, "reports")) : []),
     readReport: (name: string) => readFileSync(join(repoDir, "reports", name), "utf8"),
-    run: (options: { builtinRefinersDir?: string; repo?: string } = {}) =>
+    run: (options: Partial<RunOptions> = {}) =>
       run(runEnv, { llm, now: new Date(2026, 10, 6, 9, 30), builtinRefinersDir: refinersDir, ...options }),
   };
 }
@@ -171,6 +172,21 @@ describe("arefine run", () => {
 
     run();
     expect(observations()).toHaveLength(25);
+  });
+
+  test("処理の進み具合を、ログの読み込み・修正指示の拾い出し・観点の実行の順に知らせる", () => {
+    const { addCandidates, run } = setup();
+    addCandidates(...Array.from({ length: 25 }, (_, i) => `${i} 番目を直接呼ばないで`));
+    const progress: RunProgress[] = [];
+
+    run({ onProgress: (event) => progress.push(event) });
+
+    expect(progress).toEqual([
+      { phase: "collect" },
+      { phase: "normalize", repo: "acme/widget", done: 0, total: 25 },
+      { phase: "normalize", repo: "acme/widget", done: 20, total: 25 },
+      { phase: "dispatch", repo: "acme/widget", refiner: "sample", observations: 25 },
+    ]);
   });
 
   test("リポジトリを指定すると、そのリポジトリの候補だけを処理する", () => {
