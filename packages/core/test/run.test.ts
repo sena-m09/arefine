@@ -465,6 +465,17 @@ describe("実行をまたいだ指示のまとまり", () => {
     expect(registry().unassigned).toEqual([]);
   });
 
+  test("どの observation も振り分けられなければ、観点を呼ばずに次の実行へ回す", () => {
+    const { addObservations, groupNext, refinerInputs, registry, run } = setup();
+    addObservations({ id: "obs_a", summary: "fetch を直接呼ばない" });
+    groupNext(() => ({ new_groups: [], assignments: [] }));
+
+    run();
+
+    expect(refinerInputs()).toEqual([]);
+    expect(registry().unassigned).toEqual(["obs_a"]);
+  });
+
   test("観点には、今回 observation が入ったまとまりと、判定済みのまとまりだけを渡す", () => {
     const { addObservations, refineNext, refinerInputs, run } = setup();
     addObservations({ id: "obs_a", summary: "fetch を直接呼ばない" }, { id: "obs_b", summary: "any を使わない" });
