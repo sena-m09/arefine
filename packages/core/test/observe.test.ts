@@ -65,16 +65,23 @@ describe("arefine observe", () => {
   test("形の違う JSON は、どの項目が違うかを示して止め、何も残さない", () => {
     const { observe, observations } = setup();
 
-    expect(() => observe({ findings: [{ guidance_id: "[G-006]", summary: "型アサーションを使わない" }] })).toThrow(
+    expect(() => observe({ session: "s-1", findings: [{ guidance_id: "[G-006]", summary: "型アサーションを使わない" }] })).toThrow(
       /findings\.0\.guidance_id: guidance ID は G-012 のように/,
     );
+    expect(observations()).toEqual([]);
+  });
+
+  test("どのセッションでのレビューかが書かれていない JSON は、項目名を示して止め、何も残さない", () => {
+    const { observe, observations } = setup();
+
+    expect(() => observe({ findings: [{ guidance_id: "G-006", summary: "型アサーションを使わない" }] })).toThrow(/\n {2}session:/);
     expect(observations()).toEqual([]);
   });
 
   test("指摘のなかったセルフレビューは、何も残さずに正常に終わる", () => {
     const { observe, observations } = setup();
 
-    expect(observe({ findings: [] })).toEqual({ repo: "acme/widget", added: 0, duplicates: 0 });
+    expect(observe({ session: "s-1", findings: [] })).toEqual({ repo: "acme/widget", added: 0, duplicates: 0 });
     expect(observations()).toEqual([]);
   });
 
@@ -93,7 +100,7 @@ describe("arefine observe", () => {
   test("どのリポジトリか分からないフォルダの結果は、何も残さずに止める", () => {
     const { observe, notRepo, root } = setup();
 
-    expect(() => observe({ findings: [{ summary: "型アサーションを使わない" }] }, notRepo)).toThrow(
+    expect(() => observe({ session: "s-1", findings: [{ summary: "型アサーションを使わない" }] }, notRepo)).toThrow(
       `${notRepo} のリポジトリが分かりません。何も追記していません。`,
     );
     expect(readObservations(join(root, "home", "_unknown"))).toEqual([]);
@@ -101,7 +108,7 @@ describe("arefine observe", () => {
 
   test("セルフレビューの指摘しかないリポジトリも、run でセルフレビューを受け取る観点に渡す", () => {
     const { observe, env, root } = setup();
-    observe({ findings: [{ guidance_id: "G-006", summary: "型アサーションを使わない" }] });
+    observe({ session: "s-1", findings: [{ guidance_id: "G-006", summary: "型アサーションを使わない" }] });
     const refiners = join(root, "refiners");
     mkdirSync(join(refiners, "sample"), { recursive: true });
     writeFileSync(
@@ -128,7 +135,7 @@ describe("arefine observe", () => {
     const result = spawnSync(process.execPath, [cli, "observe"], {
       cwd: repo,
       encoding: "utf8",
-      input: JSON.stringify({ findings: [{ summary: "型アサーションを使わない" }] }),
+      input: JSON.stringify({ session: "s-1", findings: [{ summary: "型アサーションを使わない" }] }),
       env: { ...process.env, ...env },
     });
 

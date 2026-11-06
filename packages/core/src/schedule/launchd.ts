@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Schedule } from "../config/config.ts";
 
-export const LABEL = "arefine.run";
+export const LABEL = "com.github.sena-m09.arefine.run";
 const CLI = fileURLToPath(new URL("../cli.ts", import.meta.url));
 const ENV_KEYS = ["PATH", "AREFINE_HOME", "CLAUDE_CONFIG_DIR"];
 

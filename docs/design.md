@@ -135,7 +135,7 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 - `guidance_id`：normalize では `null` にする。どの guidance への指摘かは、AGENTS.md を読める観点の側で結びつける。セルフレビューが ID を引用していれば、それを入れる
 - `summary`：指示の中身を「〜しない」「〜する」の形で書いた1文
 - `evidence`：違反したコード（`violation`）と、直したコード（`fix`、なければ `null`）。セルフレビューが渡したときだけ持つ。発話からは分からないので、セッションログからの observation には付けない
-- `ref`：元の記録への参照。分からない項目は `null`
+- `ref`：元の記録への参照。セルフレビューには元の候補とログがないので、`candidate` と `log` は `null`
 - observation は観点に依存しない共通形式にする。観点固有の情報はここに足さない
 
 ### セルフレビューの取り込み
@@ -156,15 +156,15 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 }
 ```
 
-- 必須なのは `findings` と、その各要素の `summary` だけ。指摘がなければ `findings` は空でよい
+- 必須なのは `session` と `findings`、`findings` の各要素の `summary` だけ。指摘がなければ `findings` は空でよい
 - `cwd`：レビューしたリポジトリのフォルダ。省くと `arefine observe` を実行したフォルダになる。リポジトリは collect と同じく `git remote get-url origin` で求め、分からなければ何も追記せずに止める（`_unknown/` は run が処理しないので置かない）
-- `session`：セルフレビューを回したセッションの ID。省いてよい
+- `session`：セルフレビューを回したセッションの ID
 - `guidance_id`：引用した guidance ID（`G-006` の形）。対応するルールがなければ省く
 - `evidence`：省いてよい。`fix` だけ省くこともできる
 
 形が違えば、どの項目が違うかを示して止め、1件も追記しない。一部だけ追記すると、直して送り直したときに重複するため。
 
-observation の `id` は、リポジトリ・`session`・`guidance_id`・`summary`・`violation` から作るハッシュにする。同じ結果を2回渡しても1件のままにし、別のセッションでの同じ指摘は別に数える。collect が同じ発話を重複して数えず、別のセッションで同じことを言ったものは別々に数えるのと揃えた。`session` を省くと、同じ指摘は何度渡しても1件になる。
+observation の `id` は、リポジトリ・`session`・`guidance_id`・`summary`・`violation` から作るハッシュにする。同じ結果を2回渡しても1件のままにし、別のセッションでの同じ指摘は別に数える。collect が同じ発話を重複して数えず、別のセッションで同じことを言ったものは別々に数えるのと揃えた。`session` を必須にしているのは、省けると別の日に来た同じ指摘が1件にまとまり、繰り返し出ている指摘を少なく数えてしまうため。
 
 ### 保存場所
 
@@ -208,12 +208,12 @@ observation の `id` は、リポジトリ・`session`・`guidance_id`・`summar
 
 ### 定期実行
 
-`arefine schedule` は、`arefine run` を launchd から定期実行するための plist を `~/Library/LaunchAgents/arefine.run.plist` に書き出し、登録と解除のコマンドを表示する。登録は利用者が自分で行う。
+`arefine schedule` は、`arefine run` を launchd から定期実行するための plist を `~/Library/LaunchAgents/com.github.sena-m09.arefine.run.plist` に書き出し、登録と解除のコマンドを表示する。登録は利用者が自分で行う。
 
 ```sh
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/arefine.run.plist   # 登録
-launchctl bootout gui/$(id -u)/arefine.run                                  # 解除
-rm ~/Library/LaunchAgents/arefine.run.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.sena-m09.arefine.run.plist   # 登録
+launchctl bootout gui/$(id -u)/com.github.sena-m09.arefine.run                                  # 解除
+rm ~/Library/LaunchAgents/com.github.sena-m09.arefine.run.plist
 ```
 
 - 頻度は config.yaml の `schedule` から plist を作るときに決まる。頻度を変えたときや Node を入れ替えたときは、`arefine schedule` をやり直し、bootout してから bootstrap し直す
@@ -384,9 +384,9 @@ arefine/
 - リポジトリが分からない候補（`_unknown/`）は normalize しない（「処理の流れ」を参照）
 - guidance ID は各リポジトリの AGENTS.md のルールに `[G-001]` の形で振る（「guidance ID の振り方」を参照）
 - observation の `evidence` は M2 では持たず、M3 のセルフレビュー取り込みで足す（「observation の形式」を参照）
-- セルフレビューの結果は `arefine observe` に JSON で渡し、`source: self-review` の observation にする。同じ結果を送り直しても重複しないよう、`id` は中身から作る（「セルフレビューの取り込み」を参照）
+- セルフレビューの結果は `arefine observe` に JSON で渡し、`source: self-review` の observation にする。同じ結果を送り直しても重複しないよう、`id` は `session` を含む中身から作り、`session` は必須にする（「セルフレビューの取り込み」を参照）
 - 定期実行の頻度は既定で1日1回。config.yaml の `schedule` で `weekly` にも変えられる（「定期実行」を参照）
-- 定期実行は launchd で行い、plist は `~/Library/LaunchAgents/arefine.run.plist`、出力は `~/.arefine/logs/run.log` に置く。登録は利用者が `launchctl bootstrap` で行う（「定期実行」を参照）
+- 定期実行は launchd で行う。Label はほかの人に配る前提で、ほかのジョブと名前がぶつからない逆ドメインの形 `com.github.sena-m09.arefine.run` にする。plist は `~/Library/LaunchAgents/com.github.sena-m09.arefine.run.plist`、出力は `~/.arefine/logs/run.log` に置く。登録は利用者が `launchctl bootstrap` で行う（「定期実行」を参照）
 - collect と run は `~/.arefine/run.lock` で同時に1つしか動かさない（「定期実行」を参照）
 
 ## 未決事項

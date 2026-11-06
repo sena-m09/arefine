@@ -5,7 +5,7 @@ import type { Observation } from "../pipeline/observation.ts";
 
 export const SelfReview = z.object({
   cwd: z.string().min(1).optional(),
-  session: z.string().min(1).nullable().default(null),
+  session: z.string().min(1),
   findings: z.array(
     z.object({
       guidance_id: GuidanceId.nullable().default(null),

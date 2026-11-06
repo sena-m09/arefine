@@ -23,7 +23,7 @@ function setup(config?: string) {
     CLAUDE_CONFIG_DIR: join(root, "claude"),
     PATH: "/opt/tools/bin:/usr/bin:/bin",
   };
-  const plist = join(root, "user", "Library", "LaunchAgents", "arefine.run.plist");
+  const plist = join(root, "user", "Library", "LaunchAgents", "com.github.sena-m09.arefine.run.plist");
   return {
     home,
     plist,
@@ -40,7 +40,7 @@ describe("arefine schedule", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(`launchctl bootstrap gui/$(id -u) "${plist}"`);
-    expect(result.stdout).toContain("launchctl bootout gui/$(id -u)/arefine.run");
+    expect(result.stdout).toContain("launchctl bootout gui/$(id -u)/com.github.sena-m09.arefine.run");
     expect(readPlist()).toContain("<string>run</string>");
     expect(readPlist()).toMatch(/<key>StartCalendarInterval<\/key>\s*<dict>\s*<key>Hour<\/key>/);
   });

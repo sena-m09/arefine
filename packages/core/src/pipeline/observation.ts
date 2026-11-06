@@ -18,7 +18,7 @@ export const Observation = z.object({
   guidance_id: z.string().nullable(),
   summary: z.string(),
   evidence: Evidence.optional(),
-  ref: z.object({ candidate: z.string().nullable(), session: z.string().nullable(), log: z.string().nullable() }),
+  ref: z.object({ candidate: z.string().nullable(), session: z.string(), log: z.string().nullable() }),
 });
 
 export type Observation = z.infer<typeof Observation>;
