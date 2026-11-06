@@ -8,11 +8,13 @@
   ],
   "scripts": {
     "test": "bun run --filter '*' test",
-    "lint": "oxlint --deny-warnings --report-unused-disable-directives packages",
-    "typecheck": "bun run --filter '*' typecheck"
+    "lint": "oxlint --deny-warnings --report-unused-disable-directives packages tools",
+    "typecheck": "tsc -p tools/lint && bun run --filter '*' typecheck"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.91.0",
     "oxlint": "1.91.0",
-    "oxlint-tsgolint": "7.0.2006"
+    "oxlint-tsgolint": "7.0.2006",
+    "typescript": "7.0.2"
   }
 }

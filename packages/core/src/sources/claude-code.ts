@@ -42,22 +42,20 @@ export function claudeProjectsDir(env: NodeJS.ProcessEnv): string {
 }
 
 export function listSessionLogs(projectsDir: string): string[] {
-  let projects: string[];
+  return readdirOrEmpty(projectsDir).flatMap((project) => {
+    const dir = join(projectsDir, project);
+    return readdirOrEmpty(dir)
+      .filter((name) => name.endsWith(".jsonl"))
+      .map((name) => join(dir, name));
+  });
+}
+
+function readdirOrEmpty(dir: string): string[] {
   try {
-    projects = readdirSync(projectsDir);
+    return readdirSync(dir);
   } catch {
     return [];
   }
-  return projects.flatMap((project) => {
-    const dir = join(projectsDir, project);
-    try {
-      return readdirSync(dir)
-        .filter((name) => name.endsWith(".jsonl"))
-        .map((name) => join(dir, name));
-    } catch {
-      return [];
-    }
-  });
 }
 
 export function parseLine(line: string): ParsedLine {

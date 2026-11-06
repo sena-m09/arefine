@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { arefineHome, repoDir } from "../config/paths.ts";
 import { claudeProjectsDir, listSessionLogs, parseLine } from "../sources/claude-code.ts";
+import type { Utterance } from "../sources/claude-code.ts";
 import { parseJson, readNewLines } from "./jsonl.ts";
 import { resolveRepo } from "./repo.ts";
 
@@ -25,53 +26,67 @@ export type CollectSummary = {
   unreadable: number;
 };
 
+type LogDelta = {
+  log: string;
+  nextOffset: number;
+  utterances: Utterance[];
+  unreadable: number;
+};
+
 export function collect(env: NodeJS.ProcessEnv): CollectSummary {
   const home = arefineHome(env);
   const cursorsFile = join(home, "cursors.json");
   const cursors = readCursors(cursorsFile);
-  const repoByCwd = new Map<string, string | null>();
-  const summary: CollectSummary = { logs: 0, candidates: 0, unreadable: 0 };
 
-  for (const log of listSessionLogs(claudeProjectsDir(env))) {
-    const offset = cursors[log] ?? 0;
-    const { lines, nextOffset } = readNewLines(log, offset);
-    if (nextOffset === offset) {
-      continue;
-    }
-    summary.logs += 1;
+  const deltas = listSessionLogs(claudeProjectsDir(env))
+    .map((log) => readLogDelta(log, cursors[log] ?? 0))
+    .filter((delta) => delta.nextOffset !== (cursors[delta.log] ?? 0));
 
-    for (const line of lines) {
-      const parsed = parseLine(line);
-      if (parsed.kind === "unreadable") {
-        summary.unreadable += 1;
-      }
-      if (parsed.kind !== "utterance") {
-        continue;
-      }
-      const { utterance } = parsed;
-      if (!repoByCwd.has(utterance.cwd)) {
-        repoByCwd.set(utterance.cwd, resolveRepo(utterance.cwd));
-      }
-      const repo = repoByCwd.get(utterance.cwd) ?? null;
-      const candidate: Candidate = {
-        id: utterance.id,
-        at: utterance.at,
-        source: "claude-session",
-        repo,
-        cwd: utterance.cwd,
-        text: utterance.text,
-        ref: { session: utterance.session, log },
-      };
-      const dir = repoDir(home, repo);
-      mkdirSync(dir, { recursive: true });
-      appendFileSync(join(dir, "candidates.jsonl"), `${JSON.stringify(candidate)}\n`);
-      summary.candidates += 1;
-    }
-    cursors[log] = nextOffset;
+  const utterances = deltas.flatMap((delta) => delta.utterances.map((utterance) => ({ utterance, log: delta.log })));
+  const repoByCwd = new Map(
+    [...new Set(utterances.map(({ utterance }) => utterance.cwd))].map((cwd) => [cwd, resolveRepo(cwd)]),
+  );
+  const candidates = utterances.map(({ utterance, log }) =>
+    toCandidate(utterance, log, repoByCwd.get(utterance.cwd) ?? null),
+  );
+
+  for (const [dir, group] of Map.groupBy(candidates, (candidate) => repoDir(home, candidate.repo))) {
+    mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, "candidates.jsonl"), group.map((candidate) => `${JSON.stringify(candidate)}\n`).join(""));
   }
+  writeCursors(cursorsFile, {
+    ...cursors,
+    ...Object.fromEntries(deltas.map((delta) => [delta.log, delta.nextOffset])),
+  });
 
-  writeCursors(cursorsFile, cursors);
-  return summary;
+  return {
+    logs: deltas.length,
+    candidates: candidates.length,
+    unreadable: deltas.reduce((sum, delta) => sum + delta.unreadable, 0),
+  };
+}
+
+function readLogDelta(log: string, offset: number): LogDelta {
+  const { lines, nextOffset } = readNewLines(log, offset);
+  const parsed = lines.map(parseLine);
+  return {
+    log,
+    nextOffset,
+    utterances: parsed.flatMap((line) => (line.kind === "utterance" ? [line.utterance] : [])),
+    unreadable: parsed.filter((line) => line.kind === "unreadable").length,
+  };
+}
+
+function toCandidate(utterance: Utterance, log: string, repo: string | null): Candidate {
+  return {
+    id: utterance.id,
+    at: utterance.at,
+    source: "claude-session",
+    repo,
+    cwd: utterance.cwd,
+    text: utterance.text,
+    ref: { session: utterance.session, log },
+  };
 }
 
 function readCursors(file: string): Cursors {

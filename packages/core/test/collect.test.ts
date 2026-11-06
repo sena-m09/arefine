@@ -1,25 +1,19 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { describe, expect, onTestFinished, test } from "vitest";
 import { z } from "zod";
 import { collect } from "../src/pipeline/collect.ts";
 import { repoFromRemoteUrl } from "../src/pipeline/repo.ts";
 
 const Candidate = z.object({ text: z.string() });
 
-let root: string;
-let env: NodeJS.ProcessEnv;
-let log: string;
-let repoCwd: string;
-let seq = 0;
-
 function human(text: string, cwd: string): string {
-  seq += 1;
   return `${JSON.stringify({
     type: "user",
-    uuid: `u-${seq}`,
+    uuid: randomUUID(),
     timestamp: "2026-11-01T10:00:00.000Z",
     sessionId: "s-1",
     cwd,
@@ -28,33 +22,36 @@ function human(text: string, cwd: string): string {
   })}\n`;
 }
 
-function candidateTexts(repoDirName: string): string[] {
-  const file = join(root, "home", repoDirName, "candidates.jsonl");
-  return readFileSync(file, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => Candidate.parse(JSON.parse(line)).text);
-}
+function setup() {
+  const root = mkdtempSync(join(tmpdir(), "arefine-"));
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
 
-beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "arefine-"));
-  env = { AREFINE_HOME: join(root, "home"), CLAUDE_CONFIG_DIR: join(root, "claude") };
+  const home = join(root, "home");
   const project = join(root, "claude", "projects", "-work-widget");
   mkdirSync(project, { recursive: true });
-  log = join(project, "s-1.jsonl");
 
-  repoCwd = join(root, "widget");
+  const repoCwd = join(root, "widget");
   mkdirSync(repoCwd);
   execFileSync("git", ["init", "-q", repoCwd]);
   execFileSync("git", ["-C", repoCwd, "remote", "add", "origin", "git@github.com:acme/widget.git"]);
-});
 
-afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
-});
+  return {
+    root,
+    home,
+    env: { AREFINE_HOME: home, CLAUDE_CONFIG_DIR: join(root, "claude") },
+    log: join(project, "s-1.jsonl"),
+    repoCwd,
+    candidateTexts: (repoDirName: string) =>
+      readFileSync(join(home, repoDirName, "candidates.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => Candidate.parse(JSON.parse(line)).text),
+  };
+}
 
 describe("arefine collect", () => {
   test("発話をリポジトリごとに保存し、リポジトリが分からない会話は _unknown にまとめる", () => {
+    const { root, env, log, repoCwd, candidateTexts } = setup();
     appendFileSync(log, human("fetch を直接呼ばないで", repoCwd));
     appendFileSync(log, human("CLAUDE.md の書き方を直して", join(root, "deleted-worktree")));
 
@@ -65,6 +62,7 @@ describe("arefine collect", () => {
   });
 
   test("2回目は前回より後に書かれた発話だけを取り出す", () => {
+    const { env, log, repoCwd, candidateTexts } = setup();
     appendFileSync(log, human("1つ目", repoCwd));
     collect(env);
     appendFileSync(log, human("2つ目", repoCwd));
@@ -76,6 +74,7 @@ describe("arefine collect", () => {
   });
 
   test("書き込み途中の行は、書き終わってから取り出す", () => {
+    const { env, log, repoCwd, candidateTexts } = setup();
     const line = human("途中で読まれた発話", repoCwd);
     appendFileSync(log, line.slice(0, 40));
     expect(collect(env).candidates).toBe(0);
@@ -87,9 +86,10 @@ describe("arefine collect", () => {
   });
 
   test("読み込み位置の記録が壊れていたら、発話を重複して追記する前に止める", () => {
+    const { home, env, log, repoCwd, candidateTexts } = setup();
     appendFileSync(log, human("1つ目", repoCwd));
     collect(env);
-    writeFileSync(join(root, "home", "cursors.json"), "{ broken");
+    writeFileSync(join(home, "cursors.json"), "{ broken");
 
     expect(() => collect(env)).toThrow("cursors.json を読めません");
     expect(candidateTexts("acme__widget")).toEqual(["1つ目"]);
