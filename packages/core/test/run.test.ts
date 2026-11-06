@@ -9,7 +9,7 @@ import { run } from "../src/pipeline/run.ts";
 import type { RunOptions, RunProgress } from "../src/pipeline/run.ts";
 
 const PromptCandidates = z.array(z.object({ id: z.string(), text: z.string() }));
-const ObservationLine = z.object({ id: z.string(), summary: z.string(), source: z.string() });
+const ObservationLine = z.object({ id: z.string(), summary: z.string(), source: z.string(), stated_as_rule: z.boolean() });
 
 type Outcome = "ok" | "fail";
 
@@ -48,7 +48,11 @@ function setup(options: { config?: string; costUsd?: number } = {}) {
         output: {
           observations: candidates
             .filter((candidate) => candidate.text.endsWith("ないで"))
-            .map((candidate) => ({ candidate_id: candidate.id, summary: candidate.text })),
+            .map((candidate) => ({
+              candidate_id: candidate.id,
+              summary: candidate.text,
+              stated_as_rule: candidate.text.startsWith("今後は"),
+            })),
         },
       };
     }
@@ -87,6 +91,7 @@ function setup(options: { config?: string; costUsd?: number } = {}) {
 
   return {
     home,
+    repoDir,
     calls,
     failNext: (...next: Outcome[]) => outcomes.push(...next),
     addCandidatesTo,
@@ -120,6 +125,51 @@ describe("arefine run", () => {
     expect(reports()).toEqual(["2026-11-06.md"]);
     expect(readReport("2026-11-06.md")).toContain("### fetch を lint で止める");
     expect(readReport("2026-11-06.md")).toContain("`obs_c-fetch を直接呼ばないで_1`");
+  });
+
+  test("今後のルールとして言い切った指示には、observation に印を付ける", () => {
+    const { addCandidates, observations, run } = setup();
+    addCandidates("今後は fetch を直接呼ばないで", "any を使わないで");
+
+    run();
+
+    expect(observations().map(({ summary, stated_as_rule }) => ({ summary, stated_as_rule }))).toEqual([
+      { summary: "今後は fetch を直接呼ばないで", stated_as_rule: true },
+      { summary: "any を使わないで", stated_as_rule: false },
+    ]);
+  });
+
+  test("印を持たない以前の observation も、言い切っていない指示として観点に渡す", () => {
+    const { repoDir, addCandidates, calls, readReport, run } = setup();
+    addCandidates("ありがとう");
+    const observation = {
+      at: "2026-11-01T10:00:00.000Z",
+      source: "claude-session",
+      repo: "acme/widget",
+      cwd: "/home/user/example",
+      guidance_id: null,
+      summary: "fetch を直接呼ばない",
+      ref: { candidate: "c-1", session: "s-1", log: "/home/user/.claude/projects/example/s-1.jsonl" },
+    };
+    writeFileSync(
+      join(repoDir, "observations.jsonl"),
+      [{ ...observation, id: "obs_old_1" }, { ...observation, id: "obs_new_1", stated_as_rule: true }]
+        .map((line) => `${JSON.stringify(line)}\n`)
+        .join(""),
+    );
+
+    run();
+
+    const passed = (calls.at(-1)?.prompt ?? "")
+      .split("\n")
+      .filter((line) => line.startsWith("{"))
+      .map((line) => ObservationLine.parse(JSON.parse(line)))
+      .map(({ id, stated_as_rule }) => ({ id, stated_as_rule }));
+    expect(passed).toEqual([
+      { id: "obs_old_1", stated_as_rule: false },
+      { id: "obs_new_1", stated_as_rule: true },
+    ]);
+    expect(readReport("2026-11-06.md")).toContain("`obs_old_1`");
   });
 
   test("もう一度実行しても、処理済みの候補と observation を LLM に渡し直さず、observation も増えない", () => {
