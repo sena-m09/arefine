@@ -79,7 +79,7 @@ export function dispatchRepo(dir: string, repo: string, refiner: Refiner, llm: L
       ...observations.map((observation) => JSON.stringify(observation)),
     ].join("\n"),
     schema: z.toJSONSchema(RefinerOutput),
-    maxBudgetUsd: budget.remainingUsd,
+    maxBudgetUsd: budget.limitUsd,
     ...(cwd === undefined ? {} : { cwd, tools: READ_ONLY_TOOLS }),
   });
   budget.charge(result.costUsd);

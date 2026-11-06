@@ -53,7 +53,7 @@ export function normalizeRepo(dir: string, repo: string, llm: Llm, budget: Budge
     if (budget.exhausted) {
       break;
     }
-    const result = normalizeBatch(batch, repo, llm, budget.remainingUsd);
+    const result = normalizeBatch(batch, repo, llm, budget.limitUsd);
     budget.charge(result.costUsd);
     if (!result.ok) {
       failures.push(result.error);
