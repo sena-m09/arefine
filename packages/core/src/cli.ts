@@ -1,12 +1,17 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { configFile } from "./config/config.ts";
+import { configFile, loadConfig } from "./config/config.ts";
 import { arefineHome } from "./config/paths.ts";
 import { claudeLlm } from "./llm/claude.ts";
 import { collect } from "./pipeline/collect.ts";
 import type { CollectSummary } from "./pipeline/collect.ts";
+import { withLock } from "./pipeline/lock.ts";
+import type { Locked } from "./pipeline/lock.ts";
+import { observe } from "./pipeline/observe.ts";
 import { run } from "./pipeline/run.ts";
 import type { RunProgress, RunSummary } from "./pipeline/run.ts";
+import { LABEL, writePlist } from "./schedule/launchd.ts";
 
 const USAGE = `arefine - コーディングエージェントのセッションログから人間の指摘を拾い、改善提案を出す
 
@@ -16,6 +21,8 @@ const USAGE = `arefine - コーディングエージェントのセッション�
 コマンド:
   collect        セッションログの新しい分から人間の発話を取り出し、候補として保存する
   run            collect のあと、候補から修正指示を拾い、有効な観点の提案をレポートにまとめる
+  observe        セルフレビューの結果（JSON）を標準入力から受け取り、修正指示として追記する
+  schedule       run を launchd から定期実行するための plist を書き出し、登録と解除の手順を表示する
 
 オプション:
   --repo <owner/name>  run で処理するリポジトリを1つに絞る。git remote の origin と同じ名前で指定する
@@ -29,26 +36,47 @@ const { values, positionals } = parseArgs({
 });
 
 const [command] = positionals;
+const home = arefineHome(process.env);
 
 if (values.help || command === undefined) {
   process.stdout.write(USAGE);
 } else if (command === "collect") {
-  guard(() => printCollected(collect(process.env)));
+  guard(() => exclusive(() => printCollected(collect(process.env))));
 } else if (command === "run" && values.repo !== undefined && typeof values.repo !== "string") {
   process.stderr.write("--repo には owner/name の形でリポジトリを指定してください。\n");
   process.exitCode = 1;
 } else if (command === "run") {
   const repo = typeof values.repo === "string" ? values.repo : undefined;
   guard(() =>
-    printRun(
-      run(process.env, {
-        llm: claudeLlm,
-        now: new Date(),
-        onProgress: printProgress,
-        ...(repo === undefined ? {} : { repo }),
-      }),
+    exclusive(() =>
+      printRun(
+        run(process.env, {
+          llm: claudeLlm,
+          now: new Date(),
+          onProgress: printProgress,
+          ...(repo === undefined ? {} : { repo }),
+        }),
+      ),
     ),
   );
+} else if (command === "observe" && process.stdin.isTTY) {
+  process.stderr.write("セルフレビューの結果の JSON を標準入力から渡してください（例: arefine observe < review.json）。\n");
+  process.exitCode = 1;
+} else if (command === "observe") {
+  guard(() => {
+    const { repo, added, duplicates } = observe(process.env, {
+      input: readFileSync(0, "utf8"),
+      cwd: process.cwd(),
+      now: new Date(),
+    });
+    process.stdout.write(
+      added + duplicates === 0
+        ? `${repo}: セルフレビューの指摘がないので、何も追記していません。\n`
+        : `${repo} に ${added} 件の修正指示を追記しました。${duplicates > 0 ? `${duplicates} 件はすでに追記済みだったので飛ばしました。` : ""}\n`,
+    );
+  });
+} else if (command === "schedule") {
+  guard(() => printSchedule());
 } else {
   process.stderr.write(`不明なコマンドです: ${command}\n使えるコマンドは arefine --help で確認してください。\n`);
   process.exitCode = 1;
@@ -61,6 +89,33 @@ function guard(action: () => void): void {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   }
+}
+
+function exclusive(action: () => void): void {
+  const locked: Locked<void> = withLock(home, action);
+  if (!locked.ok) {
+    process.stdout.write(
+      `別の arefine${locked.holder === null ? "" : `（pid ${locked.holder}）`}が動いているため、何もせずに終わります。\n終わってからもう一度実行してください。動いていないのにこの表示が続くなら、${locked.file} を削除してください。\n`,
+    );
+  }
+}
+
+function printSchedule(): void {
+  const { schedule } = loadConfig(home);
+  const { plist, log } = writePlist(process.env, home, schedule);
+  const when = schedule === "daily" ? "毎日 3:00" : "毎週月曜 3:00";
+  process.stdout.write(`定期実行の設定を書き出しました: ${plist}
+頻度: ${when}（config.yaml の schedule: ${schedule}）。スリープ中だった分は、起きたときに1回だけ動きます。
+ログ: ${log}
+
+登録するには:
+  launchctl bootstrap gui/$(id -u) "${plist}"
+やめるには:
+  launchctl bootout gui/$(id -u)/${LABEL}
+  rm "${plist}"
+
+頻度を変えたときや Node を入れ替えたときは、arefine schedule をもう一度実行し、bootout してから bootstrap し直してください。
+`);
 }
 
 function printCollected({ logs, candidates, unreadable }: CollectSummary): void {

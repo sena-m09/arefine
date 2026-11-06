@@ -9,6 +9,7 @@ import type { CollectSummary } from "./collect.ts";
 import { dispatchRepo, markDispatched } from "./dispatch.ts";
 import type { DispatchResult } from "./dispatch.ts";
 import { normalizeRepo } from "./normalize.ts";
+import { observationsFile } from "./observation.ts";
 import type { NormalizeResult } from "./normalize.ts";
 import { BUILTIN_REFINERS_DIR, enabledRefiners } from "./refiners.ts";
 import { writeReport } from "./report.ts";
@@ -103,11 +104,13 @@ function listRepoDirs(home: string): { dir: string; repo: string }[] {
   }
   return readdirSync(home, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name !== UNKNOWN_REPO_DIR)
-    .map((entry) => ({ dir: join(home, entry.name), repo: entry.name.replace("__", "/") }))
-    .filter(({ dir }) => existsSync(join(dir, "candidates.jsonl")))
-    .toSorted((a, b) => modifiedAt(b.dir) - modifiedAt(a.dir));
-}
-
-function modifiedAt(dir: string): number {
-  return statSync(join(dir, "candidates.jsonl")).mtimeMs;
+    .flatMap((entry) => {
+      const dir = join(home, entry.name);
+      const times = [join(dir, "candidates.jsonl"), observationsFile(dir)]
+        .filter((file) => existsSync(file))
+        .map((file) => statSync(file).mtimeMs);
+      return times.length === 0 ? [] : [{ dir, repo: entry.name.replace("__", "/"), modifiedAt: Math.max(...times) }];
+    })
+    .toSorted((a, b) => b.modifiedAt - a.modifiedAt)
+    .map(({ dir, repo }) => ({ dir, repo }));
 }
