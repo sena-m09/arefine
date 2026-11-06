@@ -27,11 +27,13 @@ export type RunSummary = {
   repos: RepoRun[];
   spentUsd: number;
   budgetUsd: number;
+  repoNotFound: { requested: string; known: string[] } | null;
 };
 
 export type RunOptions = {
   llm: Llm;
   now: Date;
+  repo?: string;
   builtinRefinersDir?: string;
 };
 
@@ -41,20 +43,27 @@ export function run(env: NodeJS.ProcessEnv, options: RunOptions): RunSummary {
   const config = loadConfig(home);
   const { refiners, missing } = enabledRefiners(config, options.builtinRefinersDir ?? BUILTIN_REFINERS_DIR);
   const budget = new Budget(config.budget_usd);
-  const summary = (repos: RepoRun[]): RunSummary => ({
+  const summary = (repos: RepoRun[], repoNotFound: RunSummary["repoNotFound"] = null): RunSummary => ({
     collected,
     refiners: refiners.map((refiner) => refiner.name),
     missing,
     repos,
     spentUsd: budget.spentUsd,
     budgetUsd: budget.limitUsd,
+    repoNotFound,
   });
   if (refiners.length === 0) {
     return summary([]);
   }
 
+  const all = listRepoDirs(home);
+  const targets = options.repo === undefined ? all : all.filter(({ repo }) => repo === options.repo);
+  if (options.repo !== undefined && targets.length === 0) {
+    return summary([], { requested: options.repo, known: all.map(({ repo }) => repo).toSorted() });
+  }
+
   const repos: RepoRun[] = [];
-  for (const { dir, repo } of listRepoDirs(home)) {
+  for (const { dir, repo } of targets) {
     const normalized = normalizeRepo(dir, repo, options.llm, budget);
     const dispatched = refiners.map((refiner) => ({
       refiner: refiner.name,

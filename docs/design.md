@@ -52,7 +52,7 @@ normalize は2段で行う。1段目はルールベースで、人間が打っ�
 
 `claude -p` は、セッションを保存しない設定（`--no-session-persistence`）で呼ぶ。保存すると、次の collect が aRefine の呼び出しを人間の発話として拾ってしまうため。ユーザーの設定・hook・MCP サーバーも読み込まない。
 
-`arefine run` は collect・normalize・dispatch・report を続けて実行する。有効な観点が1つもなければ、normalize より前で止めて LLM を呼ばない。
+`arefine run` は collect・normalize・dispatch・report を続けて実行する。有効な観点が1つもなければ、normalize より前で止めて LLM を呼ばない。`--repo owner/name` を付けると、normalize と dispatch をそのリポジトリだけに絞る。collect は LLM を使わないので、絞らずに全体を読む。
 
 「OK」「お願い」のような短い返事は1段目では落とさない。10文字以下の発話にも「日本語で頼む」のような指摘が混じっていて、長さや決まり文句で落とすと取りこぼすためで、手元のログで10文字以下は候補の14%ほどなので、2段目に任せてもコストはあまり増えない。
 

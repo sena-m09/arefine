@@ -18,11 +18,12 @@ const USAGE = `arefine - コーディングエージェントのセッション�
   run            collect のあと、候補から修正指示を拾い、有効な観点の提案をレポートにまとめる
 
 オプション:
-  -h, --help     この使い方を表示する
+  --repo <owner/name>  run で処理するリポジトリを1つに絞る。git remote の origin と同じ名前で指定する
+  -h, --help           この使い方を表示する
 `;
 
 const { values, positionals } = parseArgs({
-  options: { help: { type: "boolean", short: "h" } },
+  options: { help: { type: "boolean", short: "h" }, repo: { type: "string" } },
   allowPositionals: true,
   strict: false,
 });
@@ -33,8 +34,12 @@ if (values.help || command === undefined) {
   process.stdout.write(USAGE);
 } else if (command === "collect") {
   guard(() => printCollected(collect(process.env)));
+} else if (command === "run" && values.repo !== undefined && typeof values.repo !== "string") {
+  process.stderr.write("--repo には owner/name の形でリポジトリを指定してください。\n");
+  process.exitCode = 1;
 } else if (command === "run") {
-  guard(() => printRun(run(process.env, { llm: claudeLlm, now: new Date() })));
+  const repo = typeof values.repo === "string" ? values.repo : undefined;
+  guard(() => printRun(run(process.env, { llm: claudeLlm, now: new Date(), ...(repo === undefined ? {} : { repo }) })));
 } else {
   process.stderr.write(`不明なコマンドです: ${command}\n使えるコマンドは arefine --help で確認してください。\n`);
   process.exitCode = 1;
@@ -67,6 +72,14 @@ function printRun(summary: RunSummary): void {
     process.stdout.write(
       `有効な観点がないため、ここで止めました。\n${configFile(arefineHome(process.env))} で観点を有効にしてください（例: refiners: { lint: { enabled: true } }）。\n`,
     );
+    return;
+  }
+  if (summary.repoNotFound !== null) {
+    const { requested, known } = summary.repoNotFound;
+    process.stderr.write(
+      `${requested} での会話が見つかりません。git remote の origin と同じ owner/name で指定してください。\n会話が見つかっているリポジトリ:\n${known.map((name) => `  ${name}`).join("\n")}\n`,
+    );
+    process.exitCode = 1;
     return;
   }
 

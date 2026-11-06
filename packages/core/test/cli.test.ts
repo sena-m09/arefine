@@ -46,4 +46,11 @@ describe("arefine", () => {
     expect(result.stdout).toContain("有効な観点がないため、ここで止めました。");
     expect(result.stdout).toContain("config.yaml で観点を有効にしてください");
   });
+
+  test("run の --repo にリポジトリを書き忘れたら、全体を処理せずにエラー終了する", () => {
+    const result = arefine("run", "--repo");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("--repo には owner/name の形でリポジトリを指定してください。");
+  });
 });

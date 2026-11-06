@@ -60,22 +60,19 @@ function setup(options: { config?: string; costUsd?: number } = {}) {
   };
 
   const runEnv = { AREFINE_HOME: home, CLAUDE_CONFIG_DIR: join(root, "claude") };
-
-  return {
-    home,
-    calls,
-    failNext: (...next: Outcome[]) => outcomes.push(...next),
-    addCandidates: (...texts: string[]) =>
-      writeFileSync(
-        join(repoDir, "candidates.jsonl"),
-        texts
+  const dirOf = (repo: string) => join(home, repo.replace("/", "__"));
+  const addCandidatesTo = (repo: string, ...texts: string[]) => {
+    mkdirSync(dirOf(repo), { recursive: true });
+    writeFileSync(
+      join(dirOf(repo), "candidates.jsonl"),
+      texts
           .map((text) =>
             JSON.stringify({
               id: `c-${text}`,
               kind: "prompt",
               at: "2026-11-01T10:00:00.000Z",
               source: "claude-session",
-              repo: "acme/widget",
+              repo,
               cwd: "/home/user/example",
               text,
               ref: { session: "s-1", log: "/home/user/.claude/projects/example/s-1.jsonl" },
@@ -83,19 +80,27 @@ function setup(options: { config?: string; costUsd?: number } = {}) {
           )
           .map((line) => `${line}\n`)
           .join(""),
-        { flag: "a" },
-      ),
-    observations: () =>
-      existsSync(join(repoDir, "observations.jsonl"))
-        ? readFileSync(join(repoDir, "observations.jsonl"), "utf8")
+      { flag: "a" },
+    );
+  };
+
+  return {
+    home,
+    calls,
+    failNext: (...next: Outcome[]) => outcomes.push(...next),
+    addCandidatesTo,
+    addCandidates: (...texts: string[]) => addCandidatesTo("acme/widget", ...texts),
+    observations: (repo = "acme/widget") =>
+      existsSync(join(dirOf(repo), "observations.jsonl"))
+        ? readFileSync(join(dirOf(repo), "observations.jsonl"), "utf8")
             .trim()
             .split("\n")
             .map((line) => ObservationLine.parse(JSON.parse(line)))
         : [],
     reports: () => (existsSync(join(repoDir, "reports")) ? readdirSync(join(repoDir, "reports")) : []),
     readReport: (name: string) => readFileSync(join(repoDir, "reports", name), "utf8"),
-    run: (builtinRefinersDir = refinersDir) =>
-      run(runEnv, { llm, now: new Date(2026, 10, 6, 9, 30), builtinRefinersDir }),
+    run: (options: { builtinRefinersDir?: string; repo?: string } = {}) =>
+      run(runEnv, { llm, now: new Date(2026, 10, 6, 9, 30), builtinRefinersDir: refinersDir, ...options }),
   };
 }
 
@@ -168,6 +173,28 @@ describe("arefine run", () => {
     expect(observations()).toHaveLength(25);
   });
 
+  test("リポジトリを指定すると、そのリポジトリの候補だけを処理する", () => {
+    const { addCandidates, addCandidatesTo, observations, run } = setup();
+    addCandidates("fetch を直接呼ばないで");
+    addCandidatesTo("acme/gadget", "any を使わないで");
+
+    run({ repo: "acme/gadget" });
+
+    expect(observations("acme/gadget").map((observation) => observation.summary)).toEqual(["any を使わないで"]);
+    expect(observations("acme/widget")).toEqual([]);
+  });
+
+  test("指定したリポジトリでの会話がなければ、LLM を呼ばずに会話のあるリポジトリを示して止める", () => {
+    const { addCandidates, addCandidatesTo, calls, run } = setup();
+    addCandidates("fetch を直接呼ばないで");
+    addCandidatesTo("acme/gadget", "any を使わないで");
+
+    const summary = run({ repo: "acme/widgte" });
+
+    expect(summary.repoNotFound).toEqual({ requested: "acme/widgte", known: ["acme/gadget", "acme/widget"] });
+    expect(calls).toEqual([]);
+  });
+
   test("観点を有効にしていなければ、LLM を呼ばずに止める", () => {
     const { addCandidates, calls, run } = setup({ config: "refiners: {}\n" });
     addCandidates("fetch を直接呼ばないで");
@@ -193,7 +220,7 @@ describe("arefine run", () => {
     const { addCandidates, reports, run } = setup({ config: "refiners:\n  lint:\n    enabled: true\n" });
     addCandidates("fetch を直接呼ばないで");
 
-    const summary = run(BUILTIN_REFINERS_DIR);
+    const summary = run({ builtinRefinersDir: BUILTIN_REFINERS_DIR });
 
     expect(summary.refiners).toEqual(["lint"]);
     expect(reports()).toEqual(["2026-11-06.md"]);
