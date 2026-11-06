@@ -46,7 +46,13 @@ lint 化の観点の詳しい経緯と既存ツール調査は、別ドキュメ
 3. dispatch：有効な観点ごとに observation を渡して実行する（`claude -p` または `codex exec`）
 4. report：観点ごとの提案を Markdown のレポートにまとめる
 
-normalize は2段で行う。1段目はルールベースで、人間が打った発話と AskUserQuestion への回答だけを候補として取り出し、`candidates.jsonl` に追記する。ツールの結果、hook が差し込んだ文、バックグラウンド処理の通知、サブエージェントへの依頼文、slash command は含めない。2段目は LLM で、候補から修正指示を選んで observation にする。ログの大半は人間の発話ではないので、1段目で LLM に渡す量を減らしてコストを抑えられる。M1 では1段目までを作り、2段目は M2 で dispatch と一緒に入れる。
+normalize は2段で行う。1段目はルールベースで、人間が打った発話と AskUserQuestion への回答だけを候補として取り出し、`candidates.jsonl` に追記する。ツールの結果、hook が差し込んだ文、バックグラウンド処理の通知、サブエージェントへの依頼文、slash command は含めない。2段目は LLM で、候補から修正指示を選んで observation にする。ログの大半は人間の発話ではないので、1段目で LLM に渡す量を減らしてコストを抑えられる。
+
+2段目は、候補を20件ずつまとめて `claude -p` に渡し、修正指示を含むものだけを observation にして `observations.jsonl` に追記する。1つの発話に別々の指示があれば、指示ごとに observation を分ける。どこまで処理したかは、まとまりごとに `progress.json` に記録する。LLM の呼び出しに失敗したまとまりは処理済みにしないので、次の実行でやり直す。observation の `id` は候補の `id` から決めるので、同じ候補を処理し直しても observation は重複しない。リポジトリが分からない候補（`_unknown/`）は、観点に渡しても提案の行き先がないので処理しない。
+
+`claude -p` は、セッションを保存しない設定（`--no-session-persistence`）で呼ぶ。保存すると、次の collect が aRefine の呼び出しを人間の発話として拾ってしまうため。ユーザーの設定・hook・MCP サーバーも読み込まない。
+
+`arefine run` は collect・normalize・dispatch・report を続けて実行する。有効な観点が1つもなければ、normalize より前で止めて LLM を呼ばない。`--repo owner/name` を付けると、normalize と dispatch をそのリポジトリだけに絞る。collect は LLM を使わないので、絞らずに全体を読む。
 
 「OK」「お願い」のような短い返事は1段目では落とさない。10文字以下の発話にも「日本語で頼む」のような指摘が混じっていて、長さや決まり文句で落とすと取りこぼすためで、手元のログで10文字以下は候補の14%ほどなので、2段目に任せてもコストはあまり増えない。
 
@@ -91,26 +97,29 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 
 ### observation の形式
 
+`observations.jsonl` の1行の形。スキーマは packages/core/src/pipeline/observation.ts にある。
+
 ```json
 {
-  "id": "obs_01JBX...",
-  "at": "2026-11-06T10:12:00+09:00",
+  "id": "obs_1f0c…_1",
+  "at": "2026-11-06T01:12:00.000Z",
   "source": "claude-session",
   "repo": "owner/repo",
-  "guidance_id": "G-012",
-  "summary": "コンポーネント内で fetch を直接呼んでいる",
-  "evidence": {
-    "file": "src/components/UserCard.tsx",
-    "violation": "const res = await fetch(...)",
-    "fix": "const user = useUser(id)"
-  },
-  "ref": { "session": "...", "commit": "abc1234" }
+  "cwd": "/Users/me/works/repo",
+  "guidance_id": null,
+  "summary": "コンポーネントで fetch を直接呼ばない",
+  "ref": { "candidate": "1f0c…", "session": "…", "log": "/Users/me/.claude/projects/…/….jsonl" }
 }
 ```
 
+- `id`：`obs_<候補の id>_<その候補の中での連番>`
 - `source`：`claude-session` / `codex-session` / `self-review` / `pr-review`
-- `guidance_id`：紐づく guidance がなければ `null`。紐づけは観点側でも行える
+- `cwd`：発話したときの作業フォルダ。観点がリポジトリのファイルを読むときに使う
+- `guidance_id`：normalize では `null` にする。どの guidance への指摘かは、AGENTS.md を読める観点の側で結びつける
+- `summary`：指示の中身を「〜しない」「〜する」の形で書いた1文
 - observation は観点に依存しない共通形式にする。観点固有の情報はここに足さない
+
+違反したコードと直したコード（`evidence`）は、発話だけからは分からないので M2 では持たない。セルフレビューの取り込み（M3）で、レビュー結果から埋められるようにする。
 
 ### 保存場所
 
@@ -134,6 +143,7 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 <owner>__<repo>/
 ├── candidates.jsonl      # normalize の1段目で取り出した人間の発話と回答
 ├── observations.jsonl    # 追記専用の観測ログ
+├── progress.json         # normalize と、観点ごとの dispatch をどこまで処理したか
 ├── refiners/
 │   └── lint/             # 観点ごとの状態（lint なら registry.json・proposals/）
 └── reports/
@@ -169,9 +179,11 @@ inputs: [claude-session, codex-session, self-review]
 default_enabled: false
 ```
 
+dispatch では、観点ごとに `SKILL.md` をシステムプロンプトにして `claude -p` を呼び、まだ渡していない observation（最大100件）と、config.yaml にあるその観点の設定を渡す。observation の `source` が観点の `inputs` にないものは渡さない。発話の `cwd` が残っていれば、そこを作業フォルダにして Read・Grep・Glob だけを使えるようにする。観点はリポジトリの AGENTS.md やリンターの設定を読めるが、ファイルは書き換えられない。
+
 観点が守る約束：
 
-- 出力は Markdown の提案。各提案にタイトル、根拠になった observation の ID、変更案を含める
+- 出力は提案の一覧。各提案にタイトル（`title`）、根拠になった observation の ID（`observation_ids`）、Markdown で書いた変更案（`change`）を含める。コアがこれを `reports/<日付>.md` にまとめる
 - 状態が必要な観点は `refiners/<name>/` 以下に自分で持つ（コアの observations.jsonl は書き換えない）
 - 既定の観点もすべて `default_enabled: false`。使う人が明示的に有効化する
 
@@ -183,6 +195,7 @@ default_enabled: false
 | `<repo>/.arefine/config.yaml` | プロジェクト単位。ユーザー設定を上書きする（プロジェクト導入後） |
 
 ```yaml
+budget_usd: 1
 refiners:
   lint:
     enabled: true
@@ -194,6 +207,10 @@ custom_refiners:
 schedule: weekly
 ```
 
+`budget_usd` は1回の実行で LLM に使ってよい金額の上限（ドル）で、既定は1。`enabled` 以外の観点の設定は、コアは読まずにそのまま観点に渡す。
+
+1回の実行で使った LLM の費用を足し合わせ、上限に達したらそれ以降の呼び出しを始めない。処理しきれなかった候補と observation は次の実行に回す。上限に達する直前の呼び出しは最後まで実行するので、使う金額は上限を1回分の呼び出し（数セント）ほど超えることがある。`claude -p` の `--max-budget-usd` には残りの金額ではなく上限そのものを渡し、1回の呼び出しが上限を超えて続いたときの歯止めにだけ使う。`--max-budget-usd` は超えた時点で結果を捨てて止めるので、残りの金額を渡すと、上限の直前の呼び出しが費用だけかかって結果を残さない。
+
 既定で同梱する観点の候補は、lint 化・スキル改善・コンテキストの入れ方の3つ。最初は lint 化だけを実装する。
 
 ## 最初の観点：lint 化
@@ -201,7 +218,7 @@ schedule: weekly
 人間が繰り返し指摘した guidance について、「既存ルールで強制できる」「自作ルールなら可能」「機械判定できない」のどれかを判定し、lint 化の提案を出す。観点の名前は `lint`。
 
 - 判定のタイミング：同じ guidance に紐づく修正指示が N 件以上溜まったとき、セルフレビューで guidance 違反を指摘したとき、定期実行のとき
-- guidance ID：AGENTS.md / CLAUDE.md の各ルールに `[G-012]` のような見える ID を付け、セルフレビューが ID を引用して違反を報告できるようにする
+- guidance ID：AGENTS.md / CLAUDE.md の各ルールに `[G-012]` のような見える ID を付け、セルフレビューが ID を引用して違反を報告できるようにする（「guidance ID の振り方」を参照）
 - 判定の手順：既存リンタールールを探す → 違反例と修正例（observation の `violation` / `fix`）をテストケースにして自作ルールを試作する → テストに通らなければ棄権して「機械判定不可」とする
 - 重さの配分：セルフレビュー時は既存ルールの探索まで。自作ルールの試作は定期実行でまとめて行う
 - 状態：`refiners/lint/registry.json` に guidance ごとの判定結果・理由・判定時の観測数・リンターのバージョンを持つ。提案は `refiners/lint/proposals/` に置く
@@ -224,6 +241,18 @@ schedule: weekly
 ```
 
 `level` は `guidance` / `check` / `enforce`、`decision.result` は `existing-rule` / `custom-rule` / `not-mechanizable` / `pending` の4値。
+
+M2 の lint 観点は、registry.json を持たずに、渡された observation だけで判定する。そのため `threshold` は1回の dispatch で渡した observation の中での件数になり、実行をまたいだ件数は数えない。`threshold` に届かない指示も、レポートの「様子を見る指示」に一覧で残す。実行をまたいだ件数は、M3 で registry.json を入れるときに数える。
+
+### guidance ID の振り方
+
+- 振る対象は、各リポジトリの AGENTS.md と、ルールを直接書いている CLAUDE.md。`@AGENTS.md` のように読み込むだけの CLAUDE.md には振らない
+- 振るのは AI に守らせたいルールの行だけ。構成の説明やコマンドの一覧のような、ルールでない行には振らない
+- 形は行頭の `[G-001]`。番号は3桁で、リポジトリの中で通し番号にする
+- 文面を直しても番号は変えない。消したルールの番号は使い回さず、新しいルールには使っている最大の番号の次を振る
+- ユーザー単位の `~/.claude/CLAUDE.md` などは、プロジェクトに導入するときにあらためて決める
+
+このリポジトリの AGENTS.md に最初に振った。
 
 ## リポジトリ構成案
 
@@ -266,7 +295,7 @@ arefine/
 | --- | --- | --- |
 | M0 準備 | リポジトリ、AGENTS.md、`arefine --help` が動く CLI とテスト環境 | 完了 |
 | M1 入力 | Claude Code のセッションログから人間の発話と回答を取り出す（`arefine collect`） | 完了（#1） |
-| M2 観点と出力 | 候補を observation にし、lint 観点で Markdown レポートを出す | #2 |
+| M2 観点と出力 | 候補を observation にし、lint 観点で Markdown レポートを出す（`arefine run`） | #2 |
 | M3 定期実行と判定 | launchd からの定期実行、セルフレビューの取り込み、lint 観点の判定記録 | #3 |
 | M4 広げる | Codex 対応、自作ルールの試作、Issue / PR 出力 | #4 |
 
@@ -283,13 +312,18 @@ arefine/
 - 最初の観点の名前は `lint`。ディレクトリは `refiners/lint/`、config.yaml のキーも `lint` にする
 - AGENTS.md・CLAUDE.md の各ルールに guidance ID を振る作業は M2 に含める
 - LLM の呼び出し（normalize の2段目と観点の実行）には、ひとまず sonnet を使う。レポートの中身を見て変える
+- 設定ファイル（config.yaml・refiner.yaml）は YAML で書く。手で直す設定なのでコメントを書けることを優先した。JSON はコメントを書けず、JSONC と TOML は YAML と同じく読み込みに依存が要るうえ、TOML は周りのツールで使う例が少ない。エディタの補完は、YAML でも `# yaml-language-server: $schema=…` で JSON Schema を指定すれば使える
+- 1回の実行で LLM に使う金額の上限は、既定で1ドル。config.yaml の `budget_usd` で変えられる（「設定」を参照）
+- リポジトリが分からない候補（`_unknown/`）は normalize しない（「処理の流れ」を参照）
+- guidance ID は各リポジトリの AGENTS.md のルールに `[G-001]` の形で振る（「guidance ID の振り方」を参照）
+- observation の `evidence` は M2 では持たず、M3 のセルフレビュー取り込みで足す（「observation の形式」を参照）
 
 ## 未決事項
 
 該当するマイルストーンまでに決める。
 
 - ハーネス整理の定期実行を、独立プラグインにせずコアに統合してよいか（M3、#3）
-- 1回の実行あたりの LLM のコストの上限（M2、#2）
+- normalize の2段目に、発話の直前に AI が何をしたかを渡すか。発話だけでは「違う、直して」のような指示の中身が分からない
 - 完了ゲート menou を aRefine に入れるか、別リポジトリにするか
 - 既定の観点のうち、スキル改善とコンテキストの入れ方の中身
 - Issue / PR 出力に進む時期と、その前提になる提案の品質基準（M4、#4）

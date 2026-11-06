@@ -1,11 +1,19 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, test } from "vitest";
+import { describe, expect, onTestFinished, test } from "vitest";
 
 const cli = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
 function arefine(...args: string[]) {
-  return spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
+  const root = mkdtempSync(join(tmpdir(), "arefine-cli-"));
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+  return spawnSync(process.execPath, [cli, ...args], {
+    encoding: "utf8",
+    env: { ...process.env, AREFINE_HOME: join(root, "home"), CLAUDE_CONFIG_DIR: join(root, "claude") },
+  });
 }
 
 describe("arefine", () => {
@@ -29,5 +37,20 @@ describe("arefine", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("不明なコマンドです: unknown");
     expect(result.stderr).toContain("arefine --help");
+  });
+
+  test("run は、観点を有効にしていなければ config.yaml の場所を示して止める", () => {
+    const result = arefine("run");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("有効な観点がないため、ここで止めました。");
+    expect(result.stdout).toContain("config.yaml で観点を有効にしてください");
+  });
+
+  test("run の --repo にリポジトリを書き忘れたら、全体を処理せずにエラー終了する", () => {
+    const result = arefine("run", "--repo");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("--repo には owner/name の形でリポジトリを指定してください。");
   });
 });

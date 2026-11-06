@@ -1,22 +1,24 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { arefineHome, repoDir } from "../config/paths.ts";
 import { claudeProjectsDir, listSessionLogs, parseLine } from "../sources/claude-code.ts";
 import type { Utterance, UtteranceKind } from "../sources/claude-code.ts";
 import { parseJson, readNewLines } from "./jsonl.ts";
+import { writeJsonAtomic } from "./progress.ts";
 import { resolveRepo } from "./repo.ts";
 
-export type Candidate = {
-  id: string;
-  kind: UtteranceKind;
-  at: string;
-  source: "claude-session";
-  repo: string | null;
-  cwd: string;
-  text: string;
-  ref: { session: string; log: string };
-};
+export const Candidate = z.object({
+  id: z.string(),
+  kind: z.enum(["prompt", "answer"]) satisfies z.ZodType<UtteranceKind>,
+  at: z.string(),
+  source: z.literal("claude-session"),
+  repo: z.string().nullable(),
+  cwd: z.string(),
+  text: z.string(),
+  ref: z.object({ session: z.string(), log: z.string() }),
+});
+export type Candidate = z.infer<typeof Candidate>;
 
 const Cursors = z.record(z.string(), z.number().int().nonnegative());
 type Cursors = z.infer<typeof Cursors>;
@@ -105,8 +107,5 @@ function readCursors(file: string): Cursors {
 }
 
 function writeCursors(file: string, cursors: Cursors): void {
-  mkdirSync(join(file, ".."), { recursive: true });
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(cursors, null, 2)}\n`);
-  renameSync(tmp, file);
+  writeJsonAtomic(file, cursors);
 }
