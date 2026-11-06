@@ -9,6 +9,7 @@
 - packages/core/src/sources: 入力ソースごとのアダプタ（Claude Code・Codex・セルフレビュー）
 - refiners/: refiner。1ディレクトリ1 refiner（refiner.yaml・SKILL.md・scripts/）
 - plugin/: Claude Code・Codex 向けの配布物
+- tools/lint/: oxlint のローカルルール
 
 ## 設計上のルール
 - コアは refiner の中身を知らない。refiner 固有の処理をコアに書かない
@@ -24,7 +25,14 @@
 
 ## データの扱い
 - 生のセッションログ、そこから取ったコード片をコミットしない
-- テストのフィクスチャは匿名化した断片を packages/core/test/fixtures/ に置く
+- テストのフィクスチャは、判定に要るフィールドだけを持つレコードを手で書き、packages/core/test/fixtures/ に置く。実際のログを削って使わない。`cwd` などのパスは `/home/user/example` のような架空のものにする
+
+## 進め方
+- 作業はマイルストーンごとの GitHub issue（docs/design.md の「開発ロードマップ」から辿れる）を起点にする。着手前に issue の「着手時に決めること」を確認し、決まっていなければ先に決める
+- issue ごとにブランチを切り、PR にする。main へ直接コミットしない
+- PR を出す前に `bun run lint`・`bun run typecheck`・`bun run test` を通す。CI でも同じものが回る
+- 実際のログでの確認は、`AREFINE_HOME` を作業用のフォルダに向けて行う。本物の `~/.arefine/` には書かない
+- 方針を決めたり変えたりしたら、docs/design.md の該当セクションと「決めたこと」「未決事項」を同じ PR で更新する
 
 ## 実行環境
 - パッケージ管理は bun、CLI の実行は Node 24 以上

@@ -67,6 +67,28 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 
 セッションログの形式は安定した公開仕様ではない前提で扱う。読み取りはソースごとのアダプタに閉じ込め、形式が変わってもアダプタだけを直せばよいようにする。
 
+### 候補（candidate）の形式
+
+`arefine collect` が `candidates.jsonl` に追記する1行の形。M2 の normalize の2段目はこれを読んで observation を作る。
+
+```json
+{
+  "id": "1f0c…",
+  "kind": "prompt",
+  "at": "2026-11-06T01:12:00.000Z",
+  "source": "claude-session",
+  "repo": "owner/repo",
+  "cwd": "/Users/me/works/repo",
+  "text": "コンポーネントで fetch を直接呼ばないで",
+  "ref": { "session": "…", "log": "/Users/me/.claude/projects/…/….jsonl" }
+}
+```
+
+- `id`：セッションログのレコードの `uuid`
+- `kind`：打った発話なら `prompt`、AskUserQuestion への回答なら `answer`。`answer` の `text` は「質問: …」「回答: …」「メモ: …」の行を質問ごとにまとめたもの
+- `repo`：分からなければ `null`（そのときは `_unknown/` に入る）
+- `ref.log`：元のセッションログのパス。発話の前後のやり取り（AI が何をしたか）を読むときに使う
+
 ### observation の形式
 
 ```json
@@ -224,47 +246,29 @@ arefine/
 ├── plugin/
 │   ├── claude-code/          # plugin.json、hook、スキル
 │   └── codex/                # Codex 向けのスキル配置
+├── tools/
+│   └── lint/                 # oxlint のローカルルール（let・添字ループの禁止）
+├── .github/workflows/        # CI（lint・型チェック・テスト）
 └── docs/
-    └── design.md             # このドキュメントの内容
+    └── design.md             # このドキュメント
 ```
 
 - CLI は TypeScript（Node）で書く。lint 観点で試作する ESLint や Stylelint のルールと同じランタイムでテストできるため
-- テストのフィクスチャには、自分のセッションログを匿名化した断片を使う。生のログはコミットしない
+- テストのフィクスチャは、判定に要るフィールドだけを持つレコードを手で書く。実際のログを削って使うとパスや会話の文面が残るので、生のログからは作らない
 
 ## 開発ロードマップ
 
 最初のゴールは、Claude Code のセッションログから修正指示を拾い、lint 観点の提案を Markdown で出す流れを手元で1回通すこと（M2 の完了）。
 
-### M0 準備
+マイルストーンごとの作業と進み具合は GitHub の issue で管理する。ここには各マイルストーンの狙いだけを書く。
 
-- [x] リポジトリを作り、AGENTS.md と CLAUDE.md を置く
-- [x] CLI の雛形（`arefine --help`）とテストの実行環境を用意する
-
-### M1 入力
-
-- [x] Claude Code のセッションログを読み、人間の発話を取り出す
-- [x] 取り出した発話を candidates.jsonl に追記する（`arefine collect`）
-- [x] cursors.json で読み込み位置を記録し、差分だけ読む
-
-### M2 観点と出力
-
-- [ ] candidates.jsonl から修正指示を選び、observation に正規化して observations.jsonl に追記する
-- [ ] refiner.yaml と config.yaml を読み、有効な観点を実行する
-- [ ] lint 観点：guidance ID への紐づけと、既存リンタールールの探索まで
-- [ ] Markdown のレポートを出力する
-
-### M3 定期実行と判定
-
-- [ ] launchd（または cron）から定期実行する
-- [ ] セルフレビュー結果を `arefine observe` で取り込む
-- [ ] lint 観点の registry.json と再判定条件を実装する
-- [ ] 閾値に達した件数と、実際に lint 化できた割合を記録する
-
-### M4 広げる
-
-- [ ] Codex のセッションログに対応する
-- [ ] 自作ルールの試作と、テストに通らない場合の棄権を実装する
-- [ ] Issue / PR として出力する
+| マイルストーン | 狙い | 状態 |
+| --- | --- | --- |
+| M0 準備 | リポジトリ、AGENTS.md、`arefine --help` が動く CLI とテスト環境 | 完了 |
+| M1 入力 | Claude Code のセッションログから人間の発話と回答を取り出す（`arefine collect`） | 完了（#1） |
+| M2 観点と出力 | 候補を observation にし、lint 観点で Markdown レポートを出す | #2 |
+| M3 定期実行と判定 | launchd からの定期実行、セルフレビューの取り込み、lint 観点の判定記録 | #3 |
+| M4 広げる | Codex 対応、自作ルールの試作、Issue / PR 出力 | #4 |
 
 ## 決めたこと
 
@@ -281,8 +285,9 @@ arefine/
 
 該当するマイルストーンまでに決める。
 
-- ハーネス整理の定期実行を、独立プラグインにせずコアに統合してよいか（M3）
-- lint 観点の名前（ito / itokz）（M2）
+- ハーネス整理の定期実行を、独立プラグインにせずコアに統合してよいか（M3、#3）
+- lint 観点の名前（ito / itokz）（M2、#2）
+- guidance ID の付け方と、LLM の呼び出しに使うモデル・コストの上限（M2、#2）
 - 完了ゲート menou を aRefine に入れるか、別リポジトリにするか
 - 既定の観点のうち、スキル改善とコンテキストの入れ方の中身
-- Issue / PR 出力に進む時期と、その前提になる提案の品質基準
+- Issue / PR 出力に進む時期と、その前提になる提案の品質基準（M4、#4）
