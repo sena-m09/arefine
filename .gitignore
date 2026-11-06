@@ -1,0 +1,6 @@
+.DS_Store
+node_modules/
+
+*.jsonl
+# フィクスチャは匿名化済みなので例外にする
+!packages/core/test/fixtures/**/*.jsonl
