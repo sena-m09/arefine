@@ -30,10 +30,21 @@ const SYSTEM_PROMPT = `あなたは、人間とコーディングエージェン
 
 - 1 つの発話に別々の方針が複数あれば、方針ごとに分けます
 - summary は、方針を「〜しない」「〜する」の形で、会話を知らない人が読んでも分かる日本語の 1 文にします。issue 番号やファイル名のような、その作業だけの固有名は入れません
-- 発話に書かれていないことは推測で足しません`;
+- 発話に書かれていないことは推測で足しません
+
+stated_as_rule は、人間がその方針を、これから先も守るルールとして言い切っているかを表します。
+「今後は」「必ず」「二度と」「覚えておいて」「ルールにして」のように、今回だけでなくこれからずっと守らせる言い方をしていれば true、そうでなければ false にします。
+判定するのは言い方だけで、方針がどれだけ重要かでは判定しません。summary を「〜しない」の形にしたことも、true にする理由になりません。
+
+- 「テストのファイル名、.spec じゃなくて .test にして」→ false
+- 「今後はテストのファイル名を必ず .test にして」→ true
+- 「本番の DB に向けてコマンドを流さないで」→ false
+- 「本番の DB に向けたコマンドは二度と流さないで。覚えておいて」→ true`;
 
 const NormalizeOutput = z.object({
-  observations: z.array(z.object({ candidate_id: z.string(), summary: z.string().min(1) })),
+  observations: z.array(
+    z.object({ candidate_id: z.string(), summary: z.string().min(1), stated_as_rule: z.boolean() }),
+  ),
 });
 
 export type NormalizeResult = {
@@ -136,6 +147,7 @@ function normalizeBatch(batch: LineEntry[], repo: string, llm: Llm, maxBudgetUsd
           cwd: candidate.cwd,
           guidance_id: null,
           summary: item.summary,
+          stated_as_rule: item.stated_as_rule,
           ref: { candidate: candidate.id, session: candidate.ref.session, log: candidate.ref.log },
         }),
       );

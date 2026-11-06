@@ -13,6 +13,7 @@ export const Observation = z.object({
   cwd: z.string(),
   guidance_id: z.string().nullable(),
   summary: z.string(),
+  stated_as_rule: z.boolean().default(false),
   ref: z.object({ candidate: z.string(), session: z.string(), log: z.string() }),
 });
 
