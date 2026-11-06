@@ -42,7 +42,7 @@ lint 化の観点の詳しい経緯と既存ツール調査は、別ドキュメ
 
 1. collect：入力ソースから前回以降の新しい分だけ読む（読み込み位置を記録）。normalize の1段目もここで行う
 2. normalize：人間の修正指示・レビュー指摘を取り出し、observation に正規化する
-3. dispatch：有効な観点ごとに observation を渡して実行する（`claude -p` または `codex exec`）
+3. dispatch：有効な観点ごとに、新しい observation を指示のまとまりに振り分けてから観点を実行する（`claude -p` または `codex exec`）
 4. report：観点ごとの提案を Markdown のレポートにまとめる
 
 normalize は2段で行う。1段目はルールベースで、人間が打った発話と AskUserQuestion への回答だけを候補として取り出し、`candidates.jsonl` に追記する。ツールの結果、hook が差し込んだ文、バックグラウンド処理の通知、サブエージェントへの依頼文、slash command は含めない。2段目は LLM で、候補から修正指示を選んで observation にする。ログの大半は人間の発話ではないので、1段目で LLM に渡す量を減らしてコストを抑えられる。
@@ -196,7 +196,8 @@ observation の `id` は、リポジトリ・`session`・`guidance_id`・`summar
 ├── observations.jsonl    # 追記専用の観測ログ
 ├── progress.json         # normalize と、観点ごとの dispatch をどこまで処理したか
 ├── refiners/
-│   └── lint/             # 観点ごとの状態（lint なら registry.json・proposals/）
+│   └── lint/
+│       └── registry.json # 観点ごとの指示のまとまりと判定（「指示のまとまり」を参照）
 └── reports/
     └── 2026-11-06.md     # 実行ごとのレポート
 ```
@@ -248,13 +249,55 @@ inputs: [claude-session, codex-session, self-review]
 default_enabled: false
 ```
 
-dispatch では、観点ごとに `SKILL.md` をシステムプロンプトにして `claude -p` を呼び、まだ渡していない observation（最大100件）と、config.yaml にあるその観点の設定を渡す。observation の `source` が観点の `inputs` にないものは渡さない。発話の `cwd` が残っていれば、そこを作業フォルダにして Read・Grep・Glob だけを使えるようにする。観点はリポジトリの AGENTS.md やリンターの設定を読めるが、ファイルは書き換えられない。
+dispatch は、観点ごとに2回 `claude -p` を呼ぶ。1回目で、まだ渡していない observation（最大100件）を指示のまとまりに振り分ける（「指示のまとまり」を参照）。2回目は `SKILL.md` をシステムプロンプトにして観点を実行し、今回 observation が入ったまとまりと判定済みのまとまり、今回入った observation、config.yaml にあるその観点の設定を渡す。observation の `source` が観点の `inputs` にないものは渡さない。発話の `cwd` が残っていれば、そこを作業フォルダにして Read・Grep・Glob だけを使えるようにする。観点はリポジトリの AGENTS.md やリンターの設定を読めるが、ファイルは書き換えられない。
 
 観点が守る約束：
 
-- 出力は提案の一覧。各提案にタイトル（`title`）、根拠になった observation の ID（`observation_ids`）、Markdown で書いた変更案（`change`）を含める。コアがこれを `reports/<日付>.md` にまとめる
-- 状態が必要な観点は `refiners/<name>/` 以下に自分で持つ（コアの observations.jsonl は書き換えない）
+- 出力は、判定の一覧（`judgments`）、提案が取り入れられたと確かめたまとまり（`resolved`）、提案の一覧（`proposals`）
+- 判定には、まとまりの id、対応する guidance ID、取り入れられたかを次の判定で確かめられるか（`trackable`）、観点が次の判定で使う記録（`state`）を含める。コアは `state` の中身を読まずに registry.json に保存し、次の実行でそのまま観点に渡す
+- 各提案にタイトル（`title`）、根拠になったまとまりの id（`groups`）、Markdown で書いた変更案（`change`）を含める。コアがこれを `reports/<日付>.md` にまとめ、根拠にはまとまりに入っている observation の id を前の実行の分も含めて載せる
+- 観点は自分でファイルを書けないので、状態は判定の `state` に入れて返す（コアの observations.jsonl は書き換えない）
 - 既定の観点もすべて `default_enabled: false`。使う人が明示的に有効化する
+
+振り分けと観点の実行のどちらかに失敗したら、どちらの結果も残さず、次の実行で同じ observation から振り分け直す。
+
+### 指示のまとまり
+
+観点は「同じ指示が何回出たか」で提案するかを決めるが、1日1件ずつ出る指示は、1回の実行の中で数えると永遠に `threshold` に届かない。そのため、中身が同じ指示の observation を、実行をまたいで「指示のまとまり」に集め、観点ごとに `<owner>__<repo>/refiners/<観点>/registry.json` に残す。
+
+```json
+{
+  "groups": [
+    {
+      "id": "I-001",
+      "summary": "コンポーネントで fetch を直接呼ばない",
+      "guidance_id": null,
+      "observation_ids": ["obs_1f0c…_1", "obs_7a2e…_1", "obs_review_a7ca…"],
+      "judged_at": "2026-11-06T03:00:00.000Z",
+      "count_at_judgment": 3,
+      "trackable": true,
+      "resolved_at": null,
+      "state": { "result": "existing-rule", "reason": "…", "rule": "<リンター名>: <ルール名>", "linters": { "<リンター名>": "<version>" } }
+    }
+  ],
+  "unassigned": []
+}
+```
+
+- `id`：コアが `I-001` から連番で振る
+- `summary`：指示の中身を「〜する」「〜しない」の形で書いた1文。振り分けのときに LLM が書く
+- `guidance_id`：観点が判定のときに AGENTS.md と照らし合わせて入れる。セッションログからの observation は guidance ID を持たないので、まとまりの鍵には使わない
+- `observation_ids`：まとまりに入った observation。件数はコアがここから数える
+- `judged_at`・`count_at_judgment`：観点が最後に判定した日時と、そのときの件数。観点が判定を返したときにコアが書く
+- `trackable`・`resolved_at`：提案が取り入れられたかを確かめる対象か、取り入れを確かめた日時（「最初の観点：lint 化」を参照）
+- `state`：観点の判定の記録。コアは中身を読まない
+- `unassigned`：振り分けに失敗した observation。次の実行でもう一度振り分ける
+
+振り分けは、観点の実行とは別の `claude -p`（sonnet）で行う。既存のまとまりの id・1文・件数と、新しい observation の `summary` を渡し、既存のまとまりに入れるか、新しいまとまりを作るかを返させる。observation は id でなく `o1` のような短い key で渡し、コアが元の id に戻す。返ってきた key やまとまりの id が入力にないもの、振り分けの漏れは `unassigned` に回す。
+
+すでにまとまりに入っている observation は、読み直しても振り分け直さない。registry.json を書いてから dispatch の位置を進めるので、その間で止まっても同じ observation が2回数えられない。registry.json がないときは、dispatch の位置を無視して observations.jsonl を最初から振り分ける。M2 で観点に渡し終えた observation も、これでまとまりに入る。
+
+振り分けの誤り（違う指示を同じまとまりに入れる、同じ指示で別のまとまりを作る）は自動では直らない。気づいたら registry.json を手で直す。
 
 ### 設定
 
@@ -269,6 +312,7 @@ refiners:
   lint:
     enabled: true
     threshold: 3
+    rejudge_after: 3
   skills:
     enabled: false
 custom_refiners:
@@ -286,34 +330,22 @@ schedule: weekly
 
 人間が繰り返し指摘した guidance について、「既存ルールで強制できる」「自作ルールなら可能」「機械判定できない」のどれかを判定し、lint 化の提案を出す。観点の名前は `lint`。
 
-- 判定のタイミング：同じ guidance に紐づく修正指示が N 件以上溜まったとき、セルフレビューで guidance 違反を指摘したとき、定期実行のとき
+- 判定のタイミング：同じ指示のまとまりに修正指示が N 件以上溜まったとき、セルフレビューで guidance 違反を指摘したとき、定期実行のとき
 - guidance ID：AGENTS.md / CLAUDE.md の各ルールに `[G-012]` のような見える ID を付け、セルフレビューが ID を引用して違反を報告できるようにする（「guidance ID の振り方」を参照）
 - 判定の手順：既存リンタールールを探す → 違反例と修正例（observation の `evidence.violation` / `evidence.fix`）をテストケースにして自作ルールを試作する → テストに通らなければ棄権して「機械判定不可」とする
 - 重さの配分：セルフレビュー時は既存ルールの探索まで。自作ルールの試作は定期実行でまとめて行う
-- 状態：`refiners/lint/registry.json` に guidance ごとの判定結果・理由・判定時の観測数・リンターのバージョンを持つ。提案は `refiners/lint/proposals/` に置く
-- 再判定：前回判定以降に観測が N 件増えたとき、またはリンターのバージョンが変わったときだけ
+- 状態：指示のまとまりごとの判定を registry.json の `state` に残す（「指示のまとまり」を参照）。`state` は `result`（`existing-rule` / `custom-rule` / `not-mechanizable`）・`reason`・`rule`（提案したルール名）・`linters`（判定したときのリンターの version）を持つ
+- 判定するのは、まだ判定していないまとまりで件数が `threshold`（既定 3）以上になったか、`stated_as_rule` が `true` の observation が入ったときと、判定済みのまとまりで件数が `count_at_judgment` から `rejudge_after`（既定 3）件以上増えたか、リンターの version が変わったときだけ
+- 判定したまとまりだけを提案にする。一度提案した指示を、件数が増えるたびに毎回提案し直さないため
 - ローカル段階では提案を置くだけで、プロジェクトには自動適用しない
 
-```json
-{
-  "G-012": {
-    "level": "guidance",
-    "decision": {
-      "result": "custom-rule",
-      "reason": "import 元と呼び出し位置で判定可能",
-      "judged_at": "2026-11-06T03:00:00+09:00",
-      "obs_count_at_judgment": 3,
-      "linters": { "eslint": "9.14.0" }
-    }
-  }
-}
-```
+再判定の条件は観点の設定なので、コアは判定し直すかどうかを決めず、件数と前回の判定を観点に渡して決めさせる。リンターの version は観点が `node_modules/<パッケージ名>/package.json` から読む。新しい observation がない実行では観点を呼ばないので、version が変わったことに気づくのは、そのリポジトリで次に observation が増えたときになる。
 
-`level` は `guidance` / `check` / `enforce`、`decision.result` は `existing-rule` / `custom-rule` / `not-mechanizable` / `pending` の4値。
+人がルールとして言い切った指示（`stated_as_rule` が `true`）は、件数が `threshold` に届かなくても判定して提案にする。言い切った指示は1回しか出ていなくても重いことが多いため。指示がどれだけ重要かを LLM に採点させるとぶれやすいので、発話の言い方から判定できる言い切りを根拠にする。
 
-M2 の lint 観点は、registry.json を持たずに、渡された observation だけで判定する。そのため `threshold` は1回の dispatch で渡した observation の中での件数になり、実行をまたいだ件数は数えない。`threshold` に届かない指示も、レポートの「様子を見る指示」に一覧で残す。
+今回 observation が入ったが、まだ一度も判定していないまとまりは、レポートの「様子を見る指示」に一覧で載せる。判定済みで判定し直さなかったまとまりは載せない。
 
-ただし、`stated_as_rule` が `true` の observation を含む指示は、1件でも提案にする。人がルールとして言い切った指示は、1回しか出ていなくても重いことが多い。それなのに件数だけで決めると、様子を見る指示の一覧に1回載るだけで、読み逃すと残らない。指示がどれだけ重要かを LLM に採点させるとぶれやすいので、まずは発話の言い方から判定できる言い切りを根拠にする。実行をまたいだ件数は、M3 で registry.json を入れるときに数える。
+lint 化できた割合は、提案が取り入れられたかで測る。`existing-rule` と判定し、そのルールがまだリンターの設定で有効になっていないまとまりだけを `trackable` にする。次にそのリポジトリで観点を呼んだとき、`state.rule` のルールが有効になっていれば、観点が `resolved` で返し、コアが `resolved_at` を書く。コアは、判定したまとまりの数と、`trackable` のうち `resolved_at` があるものの割合をレポートに出す。`custom-rule` は M4 でルールのファイルを作るまで確かめられないので、`trackable` にしない。
 
 ### guidance ID の振り方
 
@@ -394,6 +426,11 @@ arefine/
 - 定期実行は launchd で行う。Label はほかの人に配る前提で、ほかのジョブと名前がぶつからない逆ドメインの形 `com.github.sena-m09.arefine.run` にする。plist は `~/Library/LaunchAgents/com.github.sena-m09.arefine.run.plist`、出力は `~/.arefine/logs/run.log` に置く。登録は利用者が `launchctl bootstrap` で行う（「定期実行」を参照）
 - collect と run は `~/.arefine/run.lock` で同時に1つしか動かさない（「定期実行」を参照）
 - 人がルールとして言い切った指示は、件数が `threshold` に届いていなくても lint 観点が提案にする。言い切りかどうかは normalize で observation の `stated_as_rule` に残す（「最初の観点：lint 化」を参照）
+- 観点の件数は、中身が同じ指示の observation を実行をまたいで集めた「指示のまとまり」で数える。guidance ID はセッションログからの observation が持たないので、鍵にしない（「指示のまとまり」を参照）
+- まとまりへの振り分けは、観点の実行とは別の sonnet の呼び出しで行う。手元の observation で測ると、別に呼べば言い換えの組 16 組をすべて同じまとまりに入れられた。観点の実行と同じ呼び出しで振り分けさせると、1回しか出ていない指示 40 件を「その他」の1つのまとまりに入れてしまった。haiku は sonnet より速くならず、出力の形を誤ることと、別の指示を1つにまとめすぎることがあった
+- registry.json はコアが書く。まとまりと件数はコアが持ち、観点の判定は `state` として中身を読まずに預かる。観点は Read・Grep・Glob しか使えず、件数の足し算を LLM に任せるとずれるため（「観点の仕様と設定」を参照）
+- lint 化できた割合は、次の判定のときにリンターの設定で提案したルールが有効になっているかで測る（「最初の観点：lint 化」を参照）
+- 観点の状態は SQLite にせず JSON のままにする。observation は年に数千行、registry.json は指示の数だけと量が小さく、検索の速さは問題にならない。手で読めて grep でき、観点ごとの状態をリポジトリのフォルダに持つ作りとも合う。難しいのは検索の速さではなく、新しい指示が前のどの指示と同じかを決めることで、SQLite にしても解決しない。複数リポジトリの横断集計、埋め込みを使った検索、ファイルが数十 MB になったときに見直す
 
 ## 未決事項
 
@@ -403,3 +440,4 @@ arefine/
 - 完了ゲート menou を aRefine に入れるか、別リポジトリにするか
 - 既定の観点のうち、スキル改善とコンテキストの入れ方の中身
 - Issue / PR 出力に進む時期と、その前提になる提案の品質基準（M4、#4）
+- 指示のまとまりへの振り分けを誤ったときに直す手段。いまは registry.json を手で直す

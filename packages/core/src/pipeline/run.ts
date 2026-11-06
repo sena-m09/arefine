@@ -12,6 +12,7 @@ import { normalizeRepo } from "./normalize.ts";
 import { observationsFile } from "./observation.ts";
 import type { NormalizeResult } from "./normalize.ts";
 import { BUILTIN_REFINERS_DIR, enabledRefiners } from "./refiners.ts";
+import { writeRegistry } from "./registry.ts";
 import { writeReport } from "./report.ts";
 
 export type RepoRun = {
@@ -78,17 +79,20 @@ export function run(env: NodeJS.ProcessEnv, options: RunOptions): RunSummary {
     );
     const dispatched = refiners.map((refiner) => ({
       refiner: refiner.name,
-      ...dispatchRepo(dir, repo, refiner, options.llm, budget, (observations) =>
+      ...dispatchRepo(dir, repo, refiner, options.llm, budget, options.now, (observations) =>
         notify({ phase: "dispatch", repo, refiner: refiner.name, observations }),
       ),
     }));
     const report = writeReport(
       dir,
       repo,
-      dispatched.map((result) => ({ refiner: result.refiner, proposals: result.proposals })),
+      dispatched.map((result) => ({ refiner: result.refiner, proposals: result.proposals, stats: result.stats })),
       options.now,
     );
     for (const result of dispatched) {
+      if (result.registry !== null) {
+        writeRegistry(dir, result.refiner, result.registry);
+      }
       if (result.advanceTo !== null) {
         markDispatched(dir, result.refiner, result.advanceTo);
       }

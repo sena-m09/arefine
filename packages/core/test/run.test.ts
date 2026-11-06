@@ -13,6 +13,9 @@ const ObservationLine = z.object({ id: z.string(), summary: z.string(), source: 
 
 type Outcome = "ok" | "fail";
 
+const NOW = new Date(2026, 10, 6, 9, 30);
+const RUN_AT = NOW.toISOString();
+
 function setup(options: { config?: string; costUsd?: number } = {}) {
   const root = mkdtempSync(join(tmpdir(), "arefine-run-"));
   onTestFinished(() => rmSync(root, { recursive: true, force: true }));
@@ -34,6 +37,8 @@ function setup(options: { config?: string; costUsd?: number } = {}) {
 
   const calls: LlmRequest[] = [];
   const outcomes: Outcome[] = [];
+  const groupings: Group[] = [];
+  const refines: Refine[] = [];
   const costUsd = options.costUsd ?? 0.01;
   const llm: Llm = (request): LlmResult => {
     calls.push(request);
@@ -56,12 +61,12 @@ function setup(options: { config?: string; costUsd?: number } = {}) {
         },
       };
     }
-    const ids = [...request.prompt.matchAll(/"id":"(obs_[^"]+)"/g)].map((match) => match[1]);
-    return {
-      ok: true,
-      costUsd,
-      output: { proposals: [{ title: "fetch を lint で止める", observation_ids: ids, change: "no-restricted-globals で止める" }] },
-    };
+    if (isGrouping(request)) {
+      const group = groupings.shift() ?? groupBySummary;
+      return { ok: true, costUsd, output: group(parseGroupingPrompt(request.prompt)) };
+    }
+    const refine = refines.shift() ?? proposeForAdded;
+    return { ok: true, costUsd, output: refine(parseRefinerPrompt(request.prompt)) };
   };
 
   const runEnv = { AREFINE_HOME: home, CLAUDE_CONFIG_DIR: join(root, "claude") };
@@ -89,11 +94,39 @@ function setup(options: { config?: string; costUsd?: number } = {}) {
     );
   };
 
+  const addObservations = (...observations: { id: string; summary: string }[]) => {
+    writeFileSync(
+      join(repoDir, "observations.jsonl"),
+      observations
+        .map((observation) =>
+          JSON.stringify({
+            ...observation,
+            at: "2026-11-01T10:00:00.000Z",
+            source: "claude-session",
+            repo: "acme/widget",
+            cwd: "/home/user/example",
+            guidance_id: null,
+            ref: { candidate: null, session: "s-1", log: null },
+          }),
+        )
+        .map((line) => `${line}\n`)
+        .join(""),
+      { flag: "a" },
+    );
+  };
+
   return {
     home,
     repoDir,
     calls,
     failNext: (...next: Outcome[]) => outcomes.push(...next),
+    groupNext: (...next: Group[]) => groupings.push(...next),
+    refineNext: (...next: Refine[]) => refines.push(...next),
+    addObservations,
+    groupingInputs: () => calls.filter(isGrouping).map((call) => parseGroupingPrompt(call.prompt)),
+    refinerInputs: () =>
+      calls.filter((call) => !isNormalize(call) && !isGrouping(call)).map((call) => parseRefinerPrompt(call.prompt)),
+    registry: () => RegistryFile.parse(JSON.parse(readFileSync(join(repoDir, "refiners", "sample", "registry.json"), "utf8"))),
     addCandidatesTo,
     addCandidates: (...texts: string[]) => addCandidatesTo("acme/widget", ...texts),
     observations: (repo = "acme/widget") =>
@@ -106,12 +139,96 @@ function setup(options: { config?: string; costUsd?: number } = {}) {
     reports: () => (existsSync(join(repoDir, "reports")) ? readdirSync(join(repoDir, "reports")) : []),
     readReport: (name: string) => readFileSync(join(repoDir, "reports", name), "utf8"),
     run: (options: Partial<RunOptions> = {}) =>
-      run(runEnv, { llm, now: new Date(2026, 10, 6, 9, 30), builtinRefinersDir: refinersDir, ...options }),
+      run(runEnv, { llm, now: NOW, builtinRefinersDir: refinersDir, ...options }),
   };
 }
 
 function isNormalize(request: LlmRequest): boolean {
   return JSON.stringify(request.schema).includes('"observations"');
+}
+
+function isGrouping(request: LlmRequest): boolean {
+  return JSON.stringify(request.schema).includes('"assignments"');
+}
+
+const GroupingGroup = z.object({ id: z.string(), summary: z.string(), count: z.number() });
+const GroupingObservation = z.object({ key: z.string(), summary: z.string() });
+type GroupingInput = { groups: z.infer<typeof GroupingGroup>[]; observations: z.infer<typeof GroupingObservation>[] };
+type GroupingReply = {
+  new_groups: { key: string; summary: string }[];
+  assignments: { observation: string; group: string }[];
+};
+type Group = (input: GroupingInput) => GroupingReply;
+
+const RefinerGroup = z.object({ id: z.string(), count: z.number(), added: z.number(), state: z.unknown().optional() });
+const RefinerObservation = z.object({ group: z.string(), summary: z.string(), stated_as_rule: z.boolean() });
+type RefinerInput = { groups: z.infer<typeof RefinerGroup>[]; observations: z.infer<typeof RefinerObservation>[] };
+type RefinerReply = {
+  judgments: { group: string; guidance_id: string | null; trackable: boolean; state: Record<string, unknown> }[];
+  resolved: string[];
+  proposals: { title: string; groups: string[]; change: string }[];
+};
+type Refine = (input: RefinerInput) => RefinerReply;
+
+const RegistryFile = z.object({
+  groups: z.array(
+    z.object({
+      id: z.string(),
+      observation_ids: z.array(z.string()),
+      judged_at: z.string().nullable(),
+      count_at_judgment: z.number().nullable(),
+      resolved_at: z.string().nullable(),
+      state: z.unknown(),
+    }),
+  ),
+  unassigned: z.array(z.string()),
+});
+
+function jsonLines(prompt: string, prefix: string): unknown[] {
+  return prompt
+    .split("\n")
+    .filter((line) => line.startsWith(prefix))
+    .map((line): unknown => JSON.parse(line));
+}
+
+function parseGroupingPrompt(prompt: string): GroupingInput {
+  return {
+    groups: jsonLines(prompt, '{"id":').map((line) => GroupingGroup.parse(line)),
+    observations: jsonLines(prompt, '{"key":').map((line) => GroupingObservation.parse(line)),
+  };
+}
+
+function parseRefinerPrompt(prompt: string): RefinerInput {
+  return {
+    groups: jsonLines(prompt, '{"id":').map((line) => RefinerGroup.parse(line)),
+    observations: jsonLines(prompt, '{"group":').map((line) => RefinerObservation.parse(line)),
+  };
+}
+
+function groupBySummary({ groups, observations }: GroupingInput): GroupingReply {
+  const newGroups = [...new Set(observations.map((observation) => observation.summary))]
+    .filter((summary) => !groups.some((group) => group.summary === summary))
+    .map((summary, i) => ({ key: `n${i + 1}`, summary }));
+  const groupOf = (summary: string) =>
+    groups.find((group) => group.summary === summary)?.id ?? newGroups.find((group) => group.summary === summary)?.key ?? "";
+  return {
+    new_groups: newGroups,
+    assignments: observations.map((observation) => ({ observation: observation.key, group: groupOf(observation.summary) })),
+  };
+}
+
+function proposeForAdded({ groups }: RefinerInput): RefinerReply {
+  return {
+    judgments: [],
+    resolved: [],
+    proposals: [
+      {
+        title: "fetch を lint で止める",
+        groups: groups.filter((group) => group.added > 0).map((group) => group.id),
+        change: "no-restricted-globals で止める",
+      },
+    ],
+  };
 }
 
 describe("arefine run", () => {
@@ -140,7 +257,7 @@ describe("arefine run", () => {
   });
 
   test("印を持たない以前の observation も、言い切っていない指示として観点に渡す", () => {
-    const { repoDir, addCandidates, calls, readReport, run } = setup();
+    const { repoDir, addCandidates, refinerInputs, readReport, run } = setup();
     addCandidates("ありがとう");
     const observation = {
       at: "2026-11-01T10:00:00.000Z",
@@ -160,15 +277,7 @@ describe("arefine run", () => {
 
     run();
 
-    const passed = (calls.at(-1)?.prompt ?? "")
-      .split("\n")
-      .filter((line) => line.startsWith("{"))
-      .map((line) => ObservationLine.parse(JSON.parse(line)))
-      .map(({ id, stated_as_rule }) => ({ id, stated_as_rule }));
-    expect(passed).toEqual([
-      { id: "obs_old_1", stated_as_rule: false },
-      { id: "obs_new_1", stated_as_rule: true },
-    ]);
+    expect(refinerInputs().at(-1)?.observations.map(({ stated_as_rule }) => stated_as_rule)).toEqual([false, true]);
     expect(readReport("2026-11-06.md")).toContain("`obs_old_1`");
   });
 
@@ -296,5 +405,147 @@ describe("arefine run", () => {
     const { run } = setup({ config: "budget_usd: たくさん\n" });
 
     expect(() => run()).toThrow(/config\.yaml の書き方が想定と違います。\n {2}budget_usd:/);
+  });
+});
+
+describe("実行をまたいだ指示のまとまり", () => {
+  test("前の実行と同じ指示は同じまとまりに足し、件数を実行をまたいで数える", () => {
+    const { addObservations, groupingInputs, refinerInputs, registry, run } = setup();
+    addObservations({ id: "obs_a", summary: "fetch を直接呼ばない" });
+    run();
+    addObservations({ id: "obs_b", summary: "fetch を直接呼ばない" });
+
+    run();
+
+    expect(groupingInputs().at(-1)?.groups.map(({ id, count }) => ({ id, count }))).toEqual([{ id: "I-001", count: 1 }]);
+    expect(refinerInputs().at(-1)?.groups.map(({ id, count, added }) => ({ id, count, added }))).toEqual([
+      { id: "I-001", count: 2, added: 1 },
+    ]);
+    expect(registry().groups.map(({ id, observation_ids }) => ({ id, observation_ids }))).toEqual([
+      { id: "I-001", observation_ids: ["obs_a", "obs_b"] },
+    ]);
+  });
+
+  test("提案の根拠には、前の実行で同じまとまりに入れた observation も載せる", () => {
+    const { addObservations, readReport, run } = setup();
+    addObservations({ id: "obs_a", summary: "fetch を直接呼ばない" });
+    run();
+    addObservations({ id: "obs_b", summary: "fetch を直接呼ばない" });
+
+    run();
+
+    expect(readReport("2026-11-06.md")).toContain("根拠: I-001（`obs_a`, `obs_b`）");
+  });
+
+  test("振り分けには observation の id でなく短い key を渡し、まとまりには元の id で残す", () => {
+    const { addObservations, groupingInputs, registry, run } = setup();
+    addObservations({ id: "obs_長い_id_1", summary: "fetch を直接呼ばない" });
+
+    run();
+
+    expect(groupingInputs()[0]?.observations).toEqual([{ key: "o1", summary: "fetch を直接呼ばない" }]);
+    expect(registry().groups[0]?.observation_ids).toEqual(["obs_長い_id_1"]);
+  });
+
+  test("振り分けられなかった observation は観点に渡さず、次の実行でもう一度振り分ける", () => {
+    const { addObservations, groupNext, groupingInputs, refinerInputs, registry, run } = setup();
+    addObservations({ id: "obs_a", summary: "fetch を直接呼ばない" }, { id: "obs_b", summary: "any を使わない" });
+    groupNext((input) => {
+      const reply = groupBySummary(input);
+      return { ...reply, assignments: [...reply.assignments.slice(0, 1), { observation: "o9", group: "n2" }] };
+    });
+    run();
+    expect(refinerInputs()[0]?.observations.map(({ summary }) => summary)).toEqual(["fetch を直接呼ばない"]);
+    expect(registry().unassigned).toEqual(["obs_b"]);
+
+    run();
+
+    expect(groupingInputs().at(-1)?.observations.map(({ summary }) => summary)).toEqual(["any を使わない"]);
+    expect(registry().groups.flatMap(({ observation_ids }) => observation_ids)).toEqual(["obs_a", "obs_b"]);
+    expect(registry().unassigned).toEqual([]);
+  });
+
+  test("観点には、今回 observation が入ったまとまりと、判定済みのまとまりだけを渡す", () => {
+    const { addObservations, refineNext, refinerInputs, run } = setup();
+    addObservations({ id: "obs_a", summary: "fetch を直接呼ばない" }, { id: "obs_b", summary: "any を使わない" });
+    refineNext((input) => ({
+      ...proposeForAdded(input),
+      judgments: [{ group: "I-001", guidance_id: null, trackable: false, state: {} }],
+    }));
+    run();
+    addObservations({ id: "obs_c", summary: "enum を使わない" });
+
+    run();
+
+    expect(refinerInputs().at(-1)?.groups.map(({ id }) => id)).toEqual(["I-001", "I-003"]);
+  });
+
+  test("観点の判定は中身を読まずに残し、判定の日時と件数を添えて次の実行で観点に渡す", () => {
+    const { addObservations, refineNext, refinerInputs, registry, run } = setup();
+    addObservations({ id: "obs_a", summary: "fetch を直接呼ばない" }, { id: "obs_b", summary: "fetch を直接呼ばない" });
+    const state = { result: "existing-rule", linters: { oxlint: "1.0.0" } };
+    refineNext((input) => ({
+      ...proposeForAdded(input),
+      judgments: [{ group: "I-001", guidance_id: null, trackable: true, state }],
+    }));
+    run();
+    addObservations({ id: "obs_c", summary: "fetch を直接呼ばない" });
+
+    run();
+
+    expect(registry().groups[0]).toMatchObject({ judged_at: RUN_AT, count_at_judgment: 2, state });
+    expect(refinerInputs().at(-1)?.groups[0]).toMatchObject({ id: "I-001", count: 3, state });
+  });
+
+  test("提案が取り入れられたまとまりを記録し、取り入れた割合をレポートに出す", () => {
+    const { addObservations, refineNext, registry, readReport, run } = setup();
+    addObservations({ id: "obs_a", summary: "fetch を直接呼ばない" });
+    refineNext((input) => ({
+      ...proposeForAdded(input),
+      judgments: [{ group: "I-001", guidance_id: null, trackable: true, state: { rule: "no-restricted-globals" } }],
+    }));
+    run();
+    addObservations({ id: "obs_b", summary: "any を使わない" });
+    refineNext((input) => ({ ...proposeForAdded(input), resolved: ["I-001"] }));
+
+    run();
+
+    expect(registry().groups[0]?.resolved_at).toBe(RUN_AT);
+    expect(readReport("2026-11-06.md")).toContain("取り入れたかを確かめる提案 1 件のうち、取り入れ済みは 1 件（100%）です。");
+  });
+
+  test("振り分けのあとで観点の実行に失敗したら、振り分けも残さず、次の実行でやり直す", () => {
+    const { repoDir, addObservations, failNext, registry, run } = setup();
+    addObservations({ id: "obs_a", summary: "fetch を直接呼ばない" });
+    failNext("ok", "fail");
+
+    run();
+    expect(existsSync(join(repoDir, "refiners", "sample", "registry.json"))).toBe(false);
+
+    run();
+    expect(registry().groups[0]?.observation_ids).toEqual(["obs_a"]);
+  });
+
+  test("まとまりの記録がなければ、観点に渡し終えた observation も最初から振り分け直す", () => {
+    const { repoDir, addObservations, groupingInputs, registry, run } = setup();
+    addObservations({ id: "obs_a", summary: "fetch を直接呼ばない" });
+    const size = readFileSync(join(repoDir, "observations.jsonl")).length;
+    writeFileSync(join(repoDir, "progress.json"), JSON.stringify({ normalized: 0, dispatched: { sample: size } }));
+
+    run();
+
+    expect(groupingInputs().at(-1)?.observations.map(({ summary }) => summary)).toEqual(["fetch を直接呼ばない"]);
+    expect(registry().groups[0]?.observation_ids).toEqual(["obs_a"]);
+  });
+
+  test("すでにまとまりに入っている observation は、読み直しても振り分け直さない", () => {
+    const { repoDir, addObservations, groupingInputs, run } = setup();
+    addObservations({ id: "obs_a", summary: "fetch を直接呼ばない" });
+    run();
+    writeFileSync(join(repoDir, "progress.json"), JSON.stringify({ normalized: 0, dispatched: { sample: 0 } }));
+
+    run();
+
+    expect(groupingInputs()).toHaveLength(1);
   });
 });
