@@ -1,0 +1,4 @@
+name: lint
+description: 繰り返し出ている修正指示のうち、リンターで止められるものを見つけて提案する
+inputs: [claude-session, codex-session, self-review]
+default_enabled: false
