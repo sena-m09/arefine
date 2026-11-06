@@ -41,16 +41,16 @@ lint 化の観点の詳しい経緯と既存ツール調査は、別ドキュメ
 
 ### 処理の流れ
 
-1. collect：入力ソースから前回以降の新しい分だけ読む（読み込み位置を記録）
+1. collect：入力ソースから前回以降の新しい分だけ読む（読み込み位置を記録）。normalize の1段目もここで行う
 2. normalize：人間の修正指示・レビュー指摘を取り出し、observation に正規化する
 3. dispatch：有効な観点ごとに observation を渡して実行する（`claude -p` または `codex exec`）
 4. report：観点ごとの提案を Markdown のレポートにまとめる
 
-normalize は2段で行う。
-1段目はルールベースで、人間の発話だけを取り出し、ツールの結果や「OK」「続けて」のような短い返事を落とす。
-2段目は LLM で、残った候補を observation にする。
-ログの大半は修正指示ではないので、LLM に渡す量を1段目で減らしてコストを抑える。
-M1 では1段目までを作り、2段目は M2 で dispatch と一緒に入れる。
+normalize は2段で行う。1段目はルールベースで、人間が打った発話だけを候補として取り出し、`candidates.jsonl` に追記する。ツールの結果、hook が差し込んだ文、バックグラウンド処理の通知、サブエージェントへの依頼文、slash command は含めない。2段目は LLM で、候補から修正指示を選んで observation にする。ログの大半は人間の発話ではないので、1段目で LLM に渡す量を減らしてコストを抑えられる。M1 では1段目までを作り、2段目は M2 で dispatch と一緒に入れる。
+
+「OK」「お願い」のような短い返事は1段目では落とさない。10文字以下の発話にも「日本語で頼む」のような指摘が混じっていて、長さや決まり文句で落とすと取りこぼすためで、手元のログで10文字以下は候補の14%ほどなので、2段目に任せてもコストはあまり増えない。
+
+Claude Code のログでは、`type` が `user` で `origin.kind` が `human` のレコードを人間の発話とみなす。`origin` は 2.1.291 以降のログにあることを確かめていて、それより古いログで `origin` を持たないものは読み飛ばす。
 
 ### 入力ソース
 
@@ -93,15 +93,19 @@ M1 では1段目までを作り、2段目は M2 で dispatch と一緒に入れ�
 ```
 ~/.arefine/
 ├── config.yaml           # ユーザー単位の設定
-└── <owner>__<repo>/
+├── cursors.json          # セッションログのファイルごとの読み込み位置
+├── <owner>__<repo>/
+└── _unknown/             # どのリポジトリでの会話か分からないもの
 ```
+
+1つのセッションの途中で別のリポジトリに移ることがあるので、読み込み位置はリポジトリごとに分けず、ログのファイルごとに持つ。リポジトリは発話の `cwd` から `git remote get-url origin` で求め、削除済みの worktree や git でないフォルダの発話は `cwd` を記録したうえで `_unknown/` に入れる。
 
 リポジトリごとのディレクトリの中身は次のとおり。
 
 ```
 <owner>__<repo>/
+├── candidates.jsonl      # normalize の1段目で取り出した人間の発話
 ├── observations.jsonl    # 追記専用の観測ログ
-├── cursors.json          # 入力ソースごとの読み込み位置
 ├── refiners/
 │   └── lint/             # 観点ごとの状態（lint なら registry.json・proposals/）
 └── reports/
@@ -232,12 +236,13 @@ arefine/
 
 ### M1 入力
 
-- [ ] Claude Code のセッションログを読み、人間の発話を取り出す
-- [ ] 修正指示を observation に正規化して observations.jsonl に追記する
-- [ ] cursors.json で読み込み位置を記録し、差分だけ読む
+- [x] Claude Code のセッションログを読み、人間の発話を取り出す
+- [x] 取り出した発話を candidates.jsonl に追記する（`arefine collect`）
+- [x] cursors.json で読み込み位置を記録し、差分だけ読む
 
 ### M2 観点と出力
 
+- [ ] candidates.jsonl から修正指示を選び、observation に正規化して observations.jsonl に追記する
 - [ ] refiner.yaml と config.yaml を読み、有効な観点を実行する
 - [ ] lint 観点：guidance ID への紐づけと、既存リンタールールの探索まで
 - [ ] Markdown のレポートを出力する
@@ -261,7 +266,8 @@ arefine/
 - パッケージマネージャーは bun、テストは vitest、lint は oxlint、型チェックは tsc
 - CLI はビルドせず、Node 24 以上で .ts をそのまま実行する。Node は node_modules 内の .ts を実行しないので、パッケージとして配布するときはビルドが必要になる
 - データと設定は `~/.arefine/` に置く（「保存場所」を参照）
-- normalize はルールベースで絞ってから LLM に渡す2段構え（「処理の流れ」を参照）
+- normalize はルールベースで絞ってから LLM に渡す2段構え。1段目の結果は candidates.jsonl に置く（「処理の流れ」を参照）
+- どのリポジトリでの会話か分からない発話は `_unknown/` にまとめる（「保存場所」を参照）
 
 ## 未決事項
 
@@ -272,3 +278,4 @@ arefine/
 - 完了ゲート menou を aRefine に入れるか、別リポジトリにするか
 - 既定の観点のうち、スキル改善とコンテキストの入れ方の中身
 - Issue / PR 出力に進む時期と、その前提になる提案の品質基準
+- AskUserQuestion への回答を入力に加えるか。人間の判断だが、ログ上はツールの結果として記録されるので、いまの1段目では拾わない

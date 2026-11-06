@@ -23,7 +23,7 @@
 ## 実行環境
 - パッケージ管理は bun、CLI の実行は Node 24 以上
 - CLI はビルドせず、Node が .ts の型注釈を取り除いてそのまま実行する。enum や namespace など、型を消すだけでは動かない構文は使わない（tsconfig の erasableSyntaxOnly で検出する）
-- 手元で動かすときは `node packages/core/src/cli.ts --help`
+- 手元で動かすときは `node packages/core/src/cli.ts --help`。`AREFINE_HOME` を作業用のフォルダに向けると、`~/.arefine/` を汚さずに `collect` を試せる
 
 ## コマンド
 - 依存のインストール: `bun install`
