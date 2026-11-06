@@ -6,10 +6,14 @@ import { readYaml } from "./yaml.ts";
 
 export const DEFAULT_BUDGET_USD = 1;
 
+export const Schedule = z.enum(["daily", "weekly"]);
+export type Schedule = z.infer<typeof Schedule>;
+
 const Config = z.object({
   budget_usd: z.number().positive().default(DEFAULT_BUDGET_USD),
   refiners: z.record(z.string(), z.looseObject({ enabled: z.boolean().optional() })).default({}),
   custom_refiners: z.array(z.string()).default([]),
+  schedule: Schedule.default("daily"),
 });
 export type Config = z.infer<typeof Config>;
 

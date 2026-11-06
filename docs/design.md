@@ -14,7 +14,6 @@ aRefine は、コーディングエージェントのセッションログなど
 | --- | --- | --- |
 | Usoku（プラグイン管理リポジトリ） | aRefine | リポジトリ名・プロジェクト名 |
 | lint-garden（仮称） | lint 化の観点 | 最初に作る観点。名前は `lint` |
-| ハーネス整理を定期実行するプラグイン | aRefine のコアの定期実行 | 独立プラグインにせず統合する案 |
 | `lg` コマンド（仮） | `arefine` コマンド | 案 |
 
 lint 化の観点の詳しい経緯と既存ツール調査は、別ドキュメント「lint-garden（仮称）設計まとめ」にある。
@@ -52,7 +51,7 @@ normalize は2段で行う。1段目はルールベースで、人間が打っ�
 
 `claude -p` は、セッションを保存しない設定（`--no-session-persistence`）で呼ぶ。保存すると、次の collect が aRefine の呼び出しを人間の発話として拾ってしまうため。ユーザーの設定・hook・MCP サーバーも読み込まない。
 
-`arefine run` は collect・normalize・dispatch・report を続けて実行する。有効な観点が1つもなければ、normalize より前で止めて LLM を呼ばない。`--repo owner/name` を付けると、normalize と dispatch をそのリポジトリだけに絞る。collect は LLM を使わないので、絞らずに全体を読む。
+`arefine run` は collect・normalize・dispatch・report を続けて実行する。有効な観点が1つもなければ、normalize より前で止めて LLM を呼ばない。`--repo owner/name` を付けると、normalize と dispatch をそのリポジトリだけに絞る。collect は LLM を使わないので、絞らずに全体を読む。候補がなく、`arefine observe` で追記した observation だけがあるリポジトリも、観点に渡す対象に入れる。
 
 「OK」「お願い」のような短い返事は1段目では落とさない。10文字以下の発話にも「日本語で頼む」のような指摘が混じっていて、長さや決まり文句で落とすと取りこぼすためで、手元のログで10文字以下は候補の14%ほどなので、2段目に任せてもコストはあまり増えない。
 
@@ -114,14 +113,58 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 }
 ```
 
-- `id`：`obs_<候補の id>_<その候補の中での連番>`
+セルフレビューから作った observation は、guidance ID と違反したコードを持ち、元の発話がないので `ref` の `candidate` と `log` は `null` になる。
+
+```json
+{
+  "id": "obs_review_a7ca…",
+  "at": "2026-11-06T03:00:00.000Z",
+  "source": "self-review",
+  "repo": "owner/repo",
+  "cwd": "/Users/me/works/repo",
+  "guidance_id": "G-006",
+  "summary": "型アサーションを使わない",
+  "evidence": { "violation": "const user = data as User;", "fix": "const user = User.parse(data);" },
+  "ref": { "candidate": null, "session": "…", "log": null }
+}
+```
+
+- `id`：セッションログからなら `obs_<候補の id>_<その候補の中での連番>`。セルフレビューからなら `obs_review_<ハッシュ>`（「セルフレビューの取り込み」を参照）
 - `source`：`claude-session` / `codex-session` / `self-review` / `pr-review`
 - `cwd`：発話したときの作業フォルダ。観点がリポジトリのファイルを読むときに使う
-- `guidance_id`：normalize では `null` にする。どの guidance への指摘かは、AGENTS.md を読める観点の側で結びつける
+- `guidance_id`：normalize では `null` にする。どの guidance への指摘かは、AGENTS.md を読める観点の側で結びつける。セルフレビューが ID を引用していれば、それを入れる
 - `summary`：指示の中身を「〜しない」「〜する」の形で書いた1文
+- `evidence`：違反したコード（`violation`）と、直したコード（`fix`、なければ `null`）。セルフレビューが渡したときだけ持つ。発話からは分からないので、セッションログからの observation には付けない
+- `ref`：元の記録への参照。分からない項目は `null`
 - observation は観点に依存しない共通形式にする。観点固有の情報はここに足さない
 
-違反したコードと直したコード（`evidence`）は、発話だけからは分からないので M2 では持たない。セルフレビューの取り込み（M3）で、レビュー結果から埋められるようにする。
+### セルフレビューの取り込み
+
+`arefine observe` は、セルフレビューの結果を標準入力から JSON で受け取り、zod で検証してから observation として `observations.jsonl` に追記する。LLM は呼ばない。
+
+```json
+{
+  "cwd": "/Users/me/works/repo",
+  "session": "…",
+  "findings": [
+    {
+      "guidance_id": "G-006",
+      "summary": "型アサーションを使わない",
+      "evidence": { "violation": "const user = data as User;", "fix": "const user = User.parse(data);" }
+    }
+  ]
+}
+```
+
+- 必須なのは `findings` と、その各要素の `summary` だけ。指摘がなければ `findings` は空でよい
+- `cwd`：レビューしたリポジトリのフォルダ。省くと `arefine observe` を実行したフォルダになる。リポジトリは collect と同じく `git remote get-url origin` で求め、分からなければ何も追記せずに止める（`_unknown/` は run が処理しないので置かない）
+- `session`：セルフレビューを回したセッションの ID。省いてよい
+- `guidance_id`：引用した guidance ID（`G-006` の形）。対応するルールがなければ省く
+- `evidence`：省いてよい。`fix` だけ省くこともできる
+
+形が違えば、どの項目が違うかを示して止め、1件も追記しない。一部だけ追記すると、直して送り直したときに重複するため。
+
+observation の `id` は、リポジトリ・`session`・`guidance_id`・`summary`・`violation` から作るハッシュにする。同じ結果を2回渡しても1件のままにし、別のセッションでの同じ指摘は別に数える。collect が同じ発話を重複して数えず、別のセッションで同じことを言ったものは別々に数えるのと揃えた。`session` を省くと、同じ指摘は何度渡しても1件になる。
 
 ### 保存場所
 
@@ -131,6 +174,9 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 ~/.arefine/
 ├── config.yaml           # ユーザー単位の設定
 ├── cursors.json          # セッションログのファイルごとの読み込み位置
+├── run.lock              # collect・run の実行中だけある。中身は実行している pid
+├── logs/
+│   └── run.log           # 定期実行の出力
 ├── <owner>__<repo>/
 └── _unknown/             # どのリポジトリでの会話か分からないもの
 ```
@@ -159,6 +205,24 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 | `~/.local/share/arefine/`（XDG） | macOS では見つけにくい |
 | `~/.claude/plugins/data/<id>/`（`CLAUDE_PLUGIN_DATA`） | Claude Code 専用で、CLI 単体や Codex から使いにくい |
 | `~/.agents/arefine/` | `~/.agents/` はスキル置き場の慣習で、データ置き場の取り決めがない |
+
+### 定期実行
+
+`arefine schedule` は、`arefine run` を launchd から定期実行するための plist を `~/Library/LaunchAgents/arefine.run.plist` に書き出し、登録と解除のコマンドを表示する。登録は利用者が自分で行う。
+
+```sh
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/arefine.run.plist   # 登録
+launchctl bootout gui/$(id -u)/arefine.run                                  # 解除
+rm ~/Library/LaunchAgents/arefine.run.plist
+```
+
+- 頻度は config.yaml の `schedule` から plist を作るときに決まる。頻度を変えたときや Node を入れ替えたときは、`arefine schedule` をやり直し、bootout してから bootstrap し直す
+- 時刻を決めて動かす（`StartCalendarInterval`）。スリープ中に過ぎた分は、起きたときに1回だけ動く
+- launchd から起動すると PATH がほぼ空になり、`claude` と `git` が見つからない。そのため plist に、書き出したときの `PATH` と、設定されていれば `AREFINE_HOME`・`CLAUDE_CONFIG_DIR` を書く。Node と cli.ts も絶対パスで書くので、plist は使い続けるチェックアウトで書き出す
+- 出力は `~/.arefine/logs/run.log` に追記する
+- 普段の作業を止めないよう、`ProcessType: Background` と `LowPriorityIO` で優先度を下げる。launchd のジョブなので、失敗しても作業中のセッションには影響しない
+
+collect と run は、`~/.arefine/run.lock` で同時に1つしか動かないようにする。ロックを取れなかった実行は、何もせずに正常終了する。手で動かした run と定期実行が重なっても、候補や observation が二重にならないようにするため。ロックの中身は pid で、その pid のプロセスがもう動いていなければ、前の実行が途中で落ちた残りとみなして取り直す。observe は追記するだけなのでロックを取らない。
 
 ## 観点の仕様と設定
 
@@ -209,7 +273,7 @@ custom_refiners:
 schedule: weekly
 ```
 
-`budget_usd` は1回の実行で LLM に使ってよい金額の上限（ドル）で、既定は1。`enabled` 以外の観点の設定は、コアは読まずにそのまま観点に渡す。
+`budget_usd` は1回の実行で LLM に使ってよい金額の上限（ドル）で、既定は1。`schedule` は定期実行の頻度で、`daily`（毎日 3:00、既定）か `weekly`（毎週月曜 3:00）。`enabled` 以外の観点の設定は、コアは読まずにそのまま観点に渡す。
 
 1回の実行で使った LLM の費用を足し合わせ、上限に達したらそれ以降の呼び出しを始めない。処理しきれなかった候補と observation は次の実行に回す。上限に達する直前の呼び出しは最後まで実行するので、使う金額は上限を1回分の呼び出し（数セント）ほど超えることがある。`claude -p` の `--max-budget-usd` には残りの金額ではなく上限そのものを渡し、1回の呼び出しが上限を超えて続いたときの歯止めにだけ使う。`--max-budget-usd` は超えた時点で結果を捨てて止めるので、残りの金額を渡すと、上限の直前の呼び出しが費用だけかかって結果を残さない。
 
@@ -221,7 +285,7 @@ schedule: weekly
 
 - 判定のタイミング：同じ guidance に紐づく修正指示が N 件以上溜まったとき、セルフレビューで guidance 違反を指摘したとき、定期実行のとき
 - guidance ID：AGENTS.md / CLAUDE.md の各ルールに `[G-012]` のような見える ID を付け、セルフレビューが ID を引用して違反を報告できるようにする（「guidance ID の振り方」を参照）
-- 判定の手順：既存リンタールールを探す → 違反例と修正例（observation の `violation` / `fix`）をテストケースにして自作ルールを試作する → テストに通らなければ棄権して「機械判定不可」とする
+- 判定の手順：既存リンタールールを探す → 違反例と修正例（observation の `evidence.violation` / `evidence.fix`）をテストケースにして自作ルールを試作する → テストに通らなければ棄権して「機械判定不可」とする
 - 重さの配分：セルフレビュー時は既存ルールの探索まで。自作ルールの試作は定期実行でまとめて行う
 - 状態：`refiners/lint/registry.json` に guidance ごとの判定結果・理由・判定時の観測数・リンターのバージョンを持つ。提案は `refiners/lint/proposals/` に置く
 - 再判定：前回判定以降に観測が N 件増えたとき、またはリンターのバージョンが変わったときだけ
@@ -269,7 +333,8 @@ arefine/
 │       ├── src/
 │       │   ├── sources/      # claude-code / codex / self-review のアダプタ
 │       │   ├── pipeline/     # collect・normalize・dispatch・report
-│       │   └── config/       # ユーザー・プロジェクト設定の読み込み
+│       │   ├── config/       # ユーザー・プロジェクト設定の読み込み
+│       │   └── schedule/     # launchd の plist の書き出し
 │       └── test/
 │           └── fixtures/     # 匿名化したセッションログの断片
 ├── refiners/
@@ -319,12 +384,15 @@ arefine/
 - リポジトリが分からない候補（`_unknown/`）は normalize しない（「処理の流れ」を参照）
 - guidance ID は各リポジトリの AGENTS.md のルールに `[G-001]` の形で振る（「guidance ID の振り方」を参照）
 - observation の `evidence` は M2 では持たず、M3 のセルフレビュー取り込みで足す（「observation の形式」を参照）
+- セルフレビューの結果は `arefine observe` に JSON で渡し、`source: self-review` の observation にする。同じ結果を送り直しても重複しないよう、`id` は中身から作る（「セルフレビューの取り込み」を参照）
+- 定期実行の頻度は既定で1日1回。config.yaml の `schedule` で `weekly` にも変えられる（「定期実行」を参照）
+- 定期実行は launchd で行い、plist は `~/Library/LaunchAgents/arefine.run.plist`、出力は `~/.arefine/logs/run.log` に置く。登録は利用者が `launchctl bootstrap` で行う（「定期実行」を参照）
+- collect と run は `~/.arefine/run.lock` で同時に1つしか動かさない（「定期実行」を参照）
 
 ## 未決事項
 
 該当するマイルストーンまでに決める。
 
-- ハーネス整理の定期実行を、独立プラグインにせずコアに統合してよいか（M3、#3）
 - normalize の2段目に、発話の直前に AI が何をしたかを渡すか。発話だけでは「違う、直して」のような指示の中身が分からない
 - 完了ゲート menou を aRefine に入れるか、別リポジトリにするか
 - 既定の観点のうち、スキル改善とコンテキストの入れ方の中身
