@@ -53,9 +53,12 @@ export function collect(env: NodeJS.ProcessEnv): CollectSummary {
     toCandidate(utterance, log, repoByCwd.get(utterance.cwd) ?? null),
   );
 
+  const written: Candidate[] = [];
   for (const [dir, group] of Map.groupBy(candidates, (candidate) => repoDir(home, candidate.repo))) {
+    const fresh = unseen(dir, group);
     mkdirSync(dir, { recursive: true });
-    appendFileSync(join(dir, "candidates.jsonl"), group.map((candidate) => `${JSON.stringify(candidate)}\n`).join(""));
+    appendFileSync(join(dir, "candidates.jsonl"), fresh.map((candidate) => `${JSON.stringify(candidate)}\n`).join(""));
+    written.push(...fresh);
   }
   writeCursors(cursorsFile, {
     ...cursors,
@@ -64,9 +67,36 @@ export function collect(env: NodeJS.ProcessEnv): CollectSummary {
 
   return {
     logs: deltas.length,
-    candidates: candidates.length,
+    candidates: written.length,
     unreadable: deltas.reduce((sum, delta) => sum + delta.unreadable, 0),
   };
+}
+
+function unseen(dir: string, group: Candidate[]): Candidate[] {
+  const file = join(dir, "candidates.jsonl");
+  const existing = existsSync(file)
+    ? readFileSync(file, "utf8")
+        .split("\n")
+        .flatMap((line) => {
+          const candidate = Candidate.safeParse(parseJson(line));
+          return candidate.success ? [candidate.data] : [];
+        })
+    : [];
+  const seen = new Set(existing.flatMap(sameUtteranceKeys));
+  return group.filter((candidate) => {
+    const keys = sameUtteranceKeys(candidate);
+    if (keys.some((key) => seen.has(key))) {
+      return false;
+    }
+    for (const key of keys) {
+      seen.add(key);
+    }
+    return true;
+  });
+}
+
+function sameUtteranceKeys(candidate: Candidate): string[] {
+  return [`id:${candidate.id}`, `text:${candidate.ref.session}:${candidate.text}`];
 }
 
 function readLogDelta(log: string, offset: number): LogDelta {

@@ -10,12 +10,12 @@ import { repoFromRemoteUrl } from "../src/pipeline/repo.ts";
 
 const Candidate = z.object({ text: z.string() });
 
-function human(text: string, cwd: string): string {
+function human(text: string, cwd: string, { uuid = randomUUID(), session = "s-1" }: { uuid?: string; session?: string } = {}): string {
   return `${JSON.stringify({
     type: "user",
-    uuid: randomUUID(),
+    uuid,
     timestamp: "2026-11-01T10:00:00.000Z",
-    sessionId: "s-1",
+    sessionId: session,
     cwd,
     origin: { kind: "human" },
     message: { role: "user", content: text },
@@ -83,6 +83,30 @@ describe("arefine collect", () => {
     collect(env);
 
     expect(candidateTexts("acme__widget")).toEqual(["途中で読まれた発話"]);
+  });
+
+  test("再開したセッションのログに同じ発話が写っていても、1件だけ取り出す", () => {
+    const { env, log, repoCwd, candidateTexts } = setup();
+    const resumed = join(log, "..", "s-2.jsonl");
+    appendFileSync(log, human("fetch を直接呼ばないで", repoCwd, { uuid: "u-1", session: "s-1" }));
+    collect(env);
+    appendFileSync(resumed, human("fetch を直接呼ばないで", repoCwd, { uuid: "u-1", session: "s-2" }));
+
+    collect(env);
+
+    expect(candidateTexts("acme__widget")).toEqual(["fetch を直接呼ばないで"]);
+  });
+
+  test("同じセッションで同じ文面を送り直したら1件にし、別のセッションで同じことを言ったら別々に取り出す", () => {
+    const { env, log, repoCwd, candidateTexts } = setup();
+    const other = join(log, "..", "s-3.jsonl");
+    appendFileSync(log, human("force push しないで", repoCwd, { session: "s-1" }));
+    appendFileSync(log, human("force push しないで", repoCwd, { session: "s-1" }));
+    appendFileSync(other, human("force push しないで", repoCwd, { session: "s-3" }));
+
+    collect(env);
+
+    expect(candidateTexts("acme__widget")).toEqual(["force push しないで", "force push しないで"]);
   });
 
   test("読み込み位置の記録が壊れていたら、発話を重複して追記する前に止める", () => {
