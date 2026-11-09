@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { describe, expect, onTestFinished, test } from "vitest";
 import { z } from "zod";
 import { collect } from "../src/pipeline/collect.ts";
-import { repoFromRemoteUrl } from "../src/pipeline/repo.ts";
 
 const Candidate = z.object({ text: z.string() });
 
@@ -117,16 +116,5 @@ describe("arefine collect", () => {
 
     expect(() => collect(env)).toThrow("cursors.json を読めません");
     expect(candidateTexts("acme__widget")).toEqual(["1つ目"]);
-  });
-});
-
-describe("remote の URL からリポジトリ名を得る", () => {
-  test.each([
-    ["git@github.com:acme/widget.git"],
-    ["https://github.com/acme/widget.git"],
-    ["https://github.com/acme/widget"],
-    ["ssh://git@github.com/acme/widget.git"],
-  ])("%s は acme/widget になる", (url) => {
-    expect(repoFromRemoteUrl(url)).toBe("acme/widget");
   });
 });

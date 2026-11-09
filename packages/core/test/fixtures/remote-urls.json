@@ -1,0 +1,7 @@
+[
+  { "url": "git@github.com:acme/widget.git", "repo": "acme/widget" },
+  { "url": "https://github.com/acme/widget.git", "repo": "acme/widget" },
+  { "url": "https://github.com/acme/widget", "repo": "acme/widget" },
+  { "url": "ssh://git@github.com/acme/widget.git", "repo": "acme/widget" },
+  { "url": "widget", "repo": null }
+]

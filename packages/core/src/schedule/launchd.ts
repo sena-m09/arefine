@@ -7,6 +7,13 @@ import type { Schedule } from "../config/config.ts";
 export const LABEL = "com.github.sena-m09.arefine.run";
 const CLI = fileURLToPath(new URL("../cli.ts", import.meta.url));
 const ENV_KEYS = ["PATH", "AREFINE_HOME", "CLAUDE_CONFIG_DIR"];
+const NOTIFY_ON_FAILURE = `echo "=== $(date '+%Y-%m-%d %H:%M:%S') arefine run ==="
+"$0" "$1" run --scheduled
+status=$?
+if [ "$status" -ne 0 ]; then
+  osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "aRefine"' -e 'end run' "定期実行が失敗しました。ログ: $2"
+fi
+exit "$status"`;
 
 export type ScheduleFiles = {
   plist: string;
@@ -44,9 +51,7 @@ function plist(env: NodeJS.ProcessEnv, home: string, schedule: Schedule, log: st
   <string>${LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${escape(process.execPath)}</string>
-    <string>${escape(CLI)}</string>
-    <string>run</string>
+${["/bin/sh", "-c", NOTIFY_ON_FAILURE, process.execPath, CLI, log].map((arg) => `    <string>${escape(arg)}</string>`).join("\n")}
   </array>
   <key>EnvironmentVariables</key>
   <dict>

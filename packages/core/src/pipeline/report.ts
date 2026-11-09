@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { GroupedProposal, RegistryStats } from "./registry.ts";
+import { recordReport } from "./unread.ts";
 
 export type ReportSection = {
   refiner: string;
@@ -34,6 +35,11 @@ export function writeReport(dir: string, repo: string, sections: ReportSection[]
     ...(section.stats === null || section.stats.judged === 0 ? [] : [statsLine(section.stats), ""]),
   ]);
   appendFileSync(file, `${[...header, ...body].join("\n")}\n`);
+  recordReport(dir, {
+    at: now.toISOString(),
+    report: file,
+    proposals: filled.reduce((sum, section) => sum + section.proposals.length, 0),
+  });
   return file;
 }
 
