@@ -52,6 +52,8 @@ Claude Code のプラグインを入れると、まだ読んでいない提案�
 /plugin install arefine@arefine
 ```
 
+プラグインは、Claude Code から見える PATH の `node` で動きます。その `node` も Node 24 以上にしてください。古いと、セッションを始めるたびに hook のエラーが出ます。
+
 提案を読み終えたら、そのリポジトリのフォルダで `arefine ack` を実行してください。そのリポジトリの提案をすべて読んだことにして、次からは知らせなくなります。別のフォルダから実行するときは、`arefine ack --repo owner/name` でリポジトリを指定します。
 
 `arefine ack` を実行するまでは、そのリポジトリでセッションを始めるたびに知らせます。`/clear` や compact のあとには知らせません。
