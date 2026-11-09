@@ -444,7 +444,7 @@ arefine/
 - 定期実行は launchd で行う。Label はほかの人に配る前提で、ほかのジョブと名前がぶつからない逆ドメインの形 `com.github.sena-m09.arefine.run` にする。plist は `~/Library/LaunchAgents/com.github.sena-m09.arefine.run.plist`、出力は `~/.arefine/logs/run.log` に置く。登録は利用者が `launchctl bootstrap` で行う（「定期実行」を参照）
 - collect と run は `~/.arefine/run.lock` で同時に1つしか動かさない（「定期実行」を参照）
 - 人がルールとして言い切った指示は、件数が `threshold` に届いていなくても lint 観点が提案にする。言い切りかどうかは normalize で observation の `stated_as_rule` に残す（「最初の観点：lint 化」を参照）
-- 言い切っていなくても、取り返しのつかない操作や情報の漏れにつながる指示は、件数が `threshold` に届いていなくても lint 観点が提案にする。どの種類に当たるかは、normalize で observation の `risk_kind` に、3種類の一覧から選ばせて残す（「最初の観点：lint 化」を参照）
+- 言い切っていなくても、取り返しのつかない操作や情報の漏れにつながる指示は、件数が `threshold` に届いていなくても lint 観点が提案にする。どの種類に当たるかは、normalize で observation の `risk_kind` に、3種類の一覧から選ばせて残す（「最初の観点：lint 化」を参照）。正解を決めた架空の候補 35 件を、回ごとに順番を混ぜ直して5回 normalize すると、observation になった回の種類は1件を除いて5回とも正解と同じだった。外れた1件は「push する前に lint を通す」のような、手元の外への反映の前に確かめることを求める指示で、5回中1回だけ `null` になった。「待って」と止めただけの発話は observation にならないことがあったので、操作を止めた発話を方針として拾うよう normalize のプロンプトに足した
 - 観点の件数は、中身が同じ指示の observation を実行をまたいで集めた「指示のまとまり」で数える。guidance ID はセッションログからの observation が持たないので、鍵にしない（「指示のまとまり」を参照）
 - まとまりへの振り分けは、観点の実行とは別の sonnet の呼び出しで行う。手元の observation で測ると、別に呼べば言い換えの組 16 組をすべて同じまとまりに入れられた。観点の実行と同じ呼び出しで振り分けさせると、1回しか出ていない指示 40 件を「その他」の1つのまとまりに入れてしまった。haiku は sonnet より速くならず、出力の形を誤ることと、別の指示を1つにまとめすぎることがあった
 - registry.json はコアが書く。まとまりと件数はコアが持ち、観点の判定は `state` として中身を読まずに預かる。観点は Read・Grep・Glob しか使えず、件数の足し算を LLM に任せるとずれるため（「観点の仕様と設定」を参照）
