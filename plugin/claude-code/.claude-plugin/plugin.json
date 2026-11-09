@@ -1,0 +1,8 @@
+{
+  "name": "arefine",
+  "version": "0.1.0",
+  "description": "aRefine がまだ読んでいない改善提案を出しているとき、そのリポジトリでセッションを始めた時点で知らせる",
+  "author": { "name": "sena-m09" },
+  "repository": "https://github.com/sena-m09/arefine",
+  "license": "MIT"
+}

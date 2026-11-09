@@ -199,7 +199,9 @@ observation の `id` は、リポジトリ・`session`・`guidance_id`・`summar
 │   └── lint/
 │       └── registry.json # 観点ごとの指示のまとまりと判定（「指示のまとまり」を参照）
 └── reports/
-    └── 2026-11-06.md     # 実行ごとのレポート
+    ├── 2026-11-06.md     # 日付ごとのレポート。同じ日の実行は追記する
+    ├── index.jsonl       # レポートを書いた実行ごとの時刻・パス・提案の件数
+    └── read.json         # どこまで読んだか（「提案を知らせる」を参照）
 ```
 
 ほかの候補と見送った理由は次のとおり。
@@ -223,10 +225,40 @@ rm ~/Library/LaunchAgents/com.github.sena-m09.arefine.run.plist
 - 頻度は config.yaml の `schedule` から plist を作るときに決まる。頻度を変えたときや Node を入れ替えたときは、`arefine schedule` をやり直し、bootout してから bootstrap し直す
 - 時刻を決めて動かす（`StartCalendarInterval`）。スリープ中に過ぎた分は、起きたときに1回だけ動く
 - launchd から起動すると PATH がほぼ空になり、`claude` と `git` が見つからない。そのため plist に、書き出したときの `PATH` と、設定されていれば `AREFINE_HOME`・`CLAUDE_CONFIG_DIR` を書く。Node と cli.ts も絶対パスで書くので、plist は使い続けるチェックアウトで書き出す
-- 出力は `~/.arefine/logs/run.log` に追記する
+- 出力は `~/.arefine/logs/run.log` に追記する。各回の頭に日時の行を書く
+- 失敗したときだけ macOS の通知を出す（下を参照）
 - 普段の作業を止めないよう、`ProcessType: Background` と `LowPriorityIO` で優先度を下げる。launchd のジョブなので、失敗しても作業中のセッションには影響しない
 
+plist は node を直接起動せず、`/bin/sh -c` で `arefine run --scheduled` を動かし、終了コードが 0 以外なら `osascript` の `display notification` で「定期実行が失敗しました。ログ: <run.log のパス>」と通知する。終了コードはそのまま launchd に返す。cli.ts の中で通知せず sh で包むのは、Node を入れ替えて plist の node のパスが古くなったときのように、cli.ts が動き出す前に落ちた場合も拾うため。そのかわり通知の本文に理由は入らないので、理由は run.log で見る。通知は依存を増やさないよう `osascript` で出す。本文は AppleScript の文字列に埋め込まず引数で渡し、パスに `"` が含まれても壊れないようにしている。通知をクリックしてもログは開かない。
+
+失敗とみなすのは終了コードが 0 以外のときで、claude を起動できない、未ログインや使用上限で `claude -p` がエラーを返した、LLM の出力の形が違った、設定ファイルを読めなかった、がこれに当たる。lock で飛ばしたとき、`budget_usd` の上限で残りを次に回したときは 0 で終わるので通知しない。有効な観点がないときは、手で run したなら 0 で終わるが、`--scheduled` を付けた定期実行では 1 で終わり、通知する。定期実行を登録したまま観点を有効にしていないと、何もしない実行が誰にも気づかれずに続くため。形式を読めない発話があったときは run.log に警告を出すだけで、通知しない。
+
 collect と run は、`~/.arefine/run.lock` で同時に1つしか動かないようにする。ロックを取れなかった実行は、何もせずに正常終了する。手で動かした run と定期実行が重なっても、候補や observation が二重にならないようにするため。ロックの中身は pid で、その pid のプロセスがもう動いていなければ、前の実行が途中で落ちた残りとみなして取り直す。observe は追記するだけなのでロックを取らない。
+
+### 提案を知らせる
+
+レポートは書くだけだと、自分で見に行かないと気づけない。提案は AGENTS.md やリンターの設定を直す話なので、そのリポジトリで作業を始めるときに見えるようにする。Claude Code のプラグイン（`plugin/claude-code/`）の SessionStart hook が、作業フォルダのリポジトリにまだ読んでいない提案があれば、件数とレポートのパスを知らせる。
+
+どこまで読んだかは、リポジトリごとに時刻を1つだけ持つ。run はレポートを書くたびに `reports/index.jsonl` に `{ "at": "<実行の時刻>", "report": "<パス>", "proposals": <件数> }` を1行足す。`arefine ack` は、`reports/read.json` に `{ "read_until": "<時刻>" }` を書く。`at` が `read_until` より新しい行が、まだ読んでいない提案になる。
+
+- レポートのファイル単位で既読にしないのは、同じ日の実行が同じファイルに追記されるため。ファイルを既読にすると、そのあとに足された提案が隠れる
+- `read_until` には ack した時刻ではなく、index.jsonl のいちばん新しい `at` を書く。ack と同時に動いていた run の提案を、本人が見る前に既読にしないため
+- run は index.jsonl に追記するだけ、ack は read.json を書くだけなので、2つが同じファイルを書き換えない。ack はロックを取らない
+- 提案1件ずつは既読にしない。取り入れたかどうかは registry.json の `resolved_at` で別に測っている
+
+既読にするのは、利用者が `arefine ack` を実行したときだけ。リポジトリのフォルダで実行するとそのリポジトリの提案をすべて既読にし、`--repo owner/name` でも指定できる。知らせた時点で既読にすると、別の作業で開いたセッションで見落としたときに二度と出ず、worktree を並べて開くと最初の1つで消えてしまう。レポートを開いたことは、エディタで開いた場合を含めて知る手段がない。
+
+hook は次のように動く。
+
+- 新規の起動と再開（matcher `startup|resume`）のときだけ動く。`/clear` や compact では出さない
+- 入力の `cwd` に対して `git remote get-url origin` を1回呼び、collect と同じ規則で owner/repo を求める。gh は使わない。worktree でも origin が同じなので、元のリポジトリと同じ提案が出る
+- 利用者向けの `systemMessage` に「<owner/repo> にまだ読んでいない提案が N 件あります」、新しいものから3つまでのレポートのパス、`arefine ack` の案内を出す。Claude 向けの `additionalContext` にも同じ件数とパスを渡し、利用者に聞かれたときだけ触れ、読み終えたと言われたら `arefine ack` を実行するよう添える。`claude -p` で確かめると、`additionalContext` は Claude のコンテキストに入り、`systemMessage` は入らなかった
+- git のフォルダでない、origin がない、提案がない、すべて読んだ、のどれかなら何も出さない。どこで失敗しても何も出さずに終了コード 0 で終わり、セッションの開始を妨げない
+- LLM は呼ばない。git の呼び出しと小さなファイル2つの読み込みだけで、手元では 60〜100ms で終わる。timeout は 5 秒にしている
+
+hook は依存のない単体の TypeScript で書き、Node の型の除去でそのまま動かす。プラグインはインストールすると `~/.claude/plugins/cache/` にコピーされ、同じリポジトリの `packages/core` を読み込めないため。そのぶん、owner/repo の求め方と index.jsonl・read.json の読み方をコアと hook の2か所に持つことになる。片方だけ直して hook が黙って何も出さなくならないよう、remote の URL の例（`packages/core/test/fixtures/remote-urls.json`）を両方のテストで使い、コアの `writeReport` と `arefine ack` が書いたファイルを hook に読ませるテストを置いている。hook では zod を使えないので、形を手で確かめ、読めない行は数えない。
+
+知らせる文面は `arefine ack` をそのまま載せるので、`arefine` が PATH にあることを前提にする（README を参照）。
 
 ## 観点の仕様と設定
 
@@ -363,6 +395,8 @@ lint 化できた割合は、提案が取り入れられたかで測る。`exist
 
 ```
 arefine/
+├── .claude-plugin/
+│   └── marketplace.json      # plugin/claude-code を配る marketplace
 ├── AGENTS.md                 # 開発ルール
 ├── CLAUDE.md                 # AGENTS.md を読むよう指示するだけ
 ├── packages/
@@ -377,7 +411,7 @@ arefine/
 ├── refiners/
 │   └── lint/                 # 既定の観点（最初はこれだけ）
 ├── plugin/
-│   ├── claude-code/          # plugin.json、hook、スキル
+│   ├── claude-code/          # plugin.json、hook（SessionStart で未読の提案を知らせる）
 │   └── codex/                # Codex 向けのスキル配置
 ├── tools/
 │   └── lint/                 # oxlint のローカルルール（let・添字ループの禁止）
@@ -430,6 +464,10 @@ arefine/
 - まとまりへの振り分けは、観点の実行とは別の sonnet の呼び出しで行う。手元の observation で測ると、別に呼べば言い換えの組 16 組をすべて同じまとまりに入れられた。観点の実行と同じ呼び出しで振り分けさせると、1回しか出ていない指示 40 件を「その他」の1つのまとまりに入れてしまった。haiku は sonnet より速くならず、出力の形を誤ることと、別の指示を1つにまとめすぎることがあった
 - registry.json はコアが書く。まとまりと件数はコアが持ち、観点の判定は `state` として中身を読まずに預かる。観点は Read・Grep・Glob しか使えず、件数の足し算を LLM に任せるとずれるため（「観点の仕様と設定」を参照）
 - lint 化できた割合は、次の判定のときにリンターの設定で提案したルールが有効になっているかで測る（「最初の観点：lint 化」を参照）
+- 提案は、Claude Code のプラグインの SessionStart hook で、そのリポジトリで作業を始めるときに知らせる。どこまで読んだかはリポジトリごとの時刻1つで持ち、既読にするのは `arefine ack` だけ（「提案を知らせる」を参照）
+- SessionStart hook はプラグインの中で単体で動く TypeScript にし、コアを読み込まない。プラグインは GitHub の marketplace から入れ、cache にコピーされて動くため。形のずれは、コアと hook が同じフィクスチャを使うテストで防ぐ（「提案を知らせる」を参照）
+- `arefine` は PATH に入れて使う前提にし、知らせる文面に `arefine ack` をそのまま載せる
+- 定期実行が失敗したときだけ、macOS の通知を `osascript` で出す。plist から sh 経由で起動して終了コードを見るので、Node が見つからない場合も拾える。本文は「失敗しました。ログ: …」だけ。有効な観点がないまま定期実行が動いたときは、定期実行のときだけ失敗とする（「定期実行」を参照）
 - 観点の状態は SQLite にせず JSON のままにする。observation は年に数千行、registry.json は指示の数だけと量が小さく、検索の速さは問題にならない。手で読めて grep でき、観点ごとの状態をリポジトリのフォルダに持つ作りとも合う。難しいのは検索の速さではなく、新しい指示が前のどの指示と同じかを決めることで、SQLite にしても解決しない。複数リポジトリの横断集計、埋め込みを使った検索、ファイルが数十 MB になったときに見直す
 
 ## 未決事項

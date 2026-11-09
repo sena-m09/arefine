@@ -1,0 +1,16 @@
+{
+  "name": "arefine",
+  "owner": {
+    "name": "sena-m09"
+  },
+  "metadata": {
+    "description": "aRefine の Claude Code 向けプラグイン"
+  },
+  "plugins": [
+    {
+      "name": "arefine",
+      "source": "./plugin/claude-code",
+      "description": "aRefine がまだ読んでいない改善提案を出しているとき、そのリポジトリでセッションを始めた時点で知らせる"
+    }
+  ]
+}
