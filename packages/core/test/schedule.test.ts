@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,12 +24,31 @@ function setup(config?: string) {
     PATH: "/opt/tools/bin:/usr/bin:/bin",
   };
   const plist = join(root, "user", "Library", "LaunchAgents", "com.github.sena-m09.arefine.run.plist");
+  const readPlist = () => readFileSync(plist, "utf8");
+  const notified = join(root, "notified");
+  const fakeBin = join(root, "bin");
+  mkdirSync(fakeBin);
+  writeFileSync(join(fakeBin, "osascript"), `#!/bin/sh\nprintf '%s\\n' "$@" > "${notified}"\n`);
+  chmodSync(join(fakeBin, "osascript"), 0o755);
   return {
     home,
     plist,
     arefine: (...args: string[]) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", env }),
-    readPlist: () => readFileSync(plist, "utf8"),
+    readPlist,
+    programArguments: () => programArguments(readPlist()),
+    launch: (args: string[]) => {
+      const [program = "", ...rest] = args;
+      return spawnSync(program, rest, { encoding: "utf8", env: { ...env, PATH: `${fakeBin}:${process.env["PATH"] ?? ""}` } });
+    },
+    notification: () => (existsSync(notified) ? readFileSync(notified, "utf8") : null),
   };
+}
+
+function programArguments(plist: string): string[] {
+  const array = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(plist)?.[1] ?? "";
+  return [...array.matchAll(/<string>([\s\S]*?)<\/string>/g)].map(([, value = ""]) =>
+    value.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&"),
+  );
 }
 
 describe("arefine schedule", () => {
@@ -41,7 +60,6 @@ describe("arefine schedule", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(`launchctl bootstrap gui/$(id -u) "${plist}"`);
     expect(result.stdout).toContain("launchctl bootout gui/$(id -u)/com.github.sena-m09.arefine.run");
-    expect(readPlist()).toContain("<string>run</string>");
     expect(readPlist()).toMatch(/<key>StartCalendarInterval<\/key>\s*<dict>\s*<key>Hour<\/key>/);
   });
 
@@ -70,6 +88,50 @@ describe("arefine schedule", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("schedule:");
     expect(() => readFileSync(plist)).toThrow();
+  });
+});
+
+describe("定期実行が失敗したときの通知", () => {
+  test("Node が見つからないなど run が失敗したら、ログのパスを入れて通知し、失敗の終了コードを launchd に返す", () => {
+    const { arefine, home, programArguments, launch, notification } = setup("refiners:\n  lint:\n    enabled: true\n");
+    arefine("schedule");
+    const [sh = "", flag = "", script = "", , ...rest] = programArguments();
+
+    const result = launch([sh, flag, script, "/nonexistent/node", ...rest]);
+
+    expect(result.status).not.toBe(0);
+    expect(notification()).toContain(`定期実行が失敗しました。ログ: ${join(home, "logs", "run.log")}`);
+  });
+
+  test("有効な観点がないまま定期実行が動いたら、失敗として通知する", () => {
+    const { arefine, programArguments, launch, notification } = setup();
+    arefine("schedule");
+
+    const result = launch(programArguments());
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("定期実行で何もできなかったため、失敗として終わります。");
+    expect(notification()).toContain("定期実行が失敗しました。");
+  });
+
+  test("手で run したときは、有効な観点がなくても正常終了する", () => {
+    const { arefine } = setup();
+
+    const result = arefine("run");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("有効な観点がないため、ここで止めました。");
+  });
+
+  test("別の arefine が動いていて飛ばしたときは、通知しない", () => {
+    const { arefine, home, programArguments, launch, notification } = setup();
+    arefine("schedule");
+    writeFileSync(join(home, "run.lock"), `${process.pid}\n`);
+
+    const result = launch(programArguments());
+
+    expect(result.status).toBe(0);
+    expect(notification()).toBeNull();
   });
 });
 

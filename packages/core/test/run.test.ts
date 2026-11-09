@@ -143,7 +143,8 @@ function setup(options: { config?: string; costUsd?: number } = {}) {
             .split("\n")
             .map((line) => ObservationLine.parse(JSON.parse(line)))
         : [],
-    reports: () => (existsSync(join(repoDir, "reports")) ? readdirSync(join(repoDir, "reports")) : []),
+    reports: () =>
+      existsSync(join(repoDir, "reports")) ? readdirSync(join(repoDir, "reports")).filter((name) => name.endsWith(".md")) : [],
     readReport: (name: string) => readFileSync(join(repoDir, "reports", name), "utf8"),
     run: (options: Partial<RunOptions> = {}) =>
       run(runEnv, { llm, now: NOW, builtinRefinersDir: refinersDir, ...options }),

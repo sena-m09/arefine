@@ -6,6 +6,7 @@
       "name": "arefine-workspace",
       "devDependencies": {
         "@oxlint/plugins": "1.91.0",
+        "@types/node": "24.19.2",
         "oxlint": "1.91.0",
         "oxlint-tsgolint": "7.0.2006",
         "typescript": "7.0.2",

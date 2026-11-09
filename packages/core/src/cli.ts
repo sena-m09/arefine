@@ -2,15 +2,17 @@
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { configFile, loadConfig } from "./config/config.ts";
-import { arefineHome } from "./config/paths.ts";
+import { arefineHome, repoDir } from "./config/paths.ts";
 import { claudeLlm } from "./llm/claude.ts";
 import { collect } from "./pipeline/collect.ts";
 import type { CollectSummary } from "./pipeline/collect.ts";
 import { withLock } from "./pipeline/lock.ts";
 import type { Locked } from "./pipeline/lock.ts";
 import { observe } from "./pipeline/observe.ts";
+import { resolveRepo } from "./pipeline/repo.ts";
 import { run } from "./pipeline/run.ts";
 import type { RunProgress, RunSummary } from "./pipeline/run.ts";
+import { markRead } from "./pipeline/unread.ts";
 import { LABEL, writePlist } from "./schedule/launchd.ts";
 
 const USAGE = `arefine - コーディングエージェントのセッションログから人間の指摘を拾い、改善提案を出す
@@ -23,14 +25,15 @@ const USAGE = `arefine - コーディングエージェントのセッション�
   run            collect のあと、候補から修正指示を拾い、有効な観点の提案をレポートにまとめる
   observe        セルフレビューの結果（JSON）を標準入力から受け取り、修正指示として追記する
   schedule       run を launchd から定期実行するための plist を書き出し、登録と解除の手順を表示する
+  ack            いまいるリポジトリの提案を、すべて読んだことにする。セッションの開始時に知らせなくなる
 
 オプション:
-  --repo <owner/name>  run で処理するリポジトリを1つに絞る。git remote の origin と同じ名前で指定する
+  --repo <owner/name>  run で処理するリポジトリ、ack で読んだことにするリポジトリを1つに絞る。git remote の origin と同じ名前で指定する
   -h, --help           この使い方を表示する
 `;
 
 const { values, positionals } = parseArgs({
-  options: { help: { type: "boolean", short: "h" }, repo: { type: "string" } },
+  options: { help: { type: "boolean", short: "h" }, repo: { type: "string" }, scheduled: { type: "boolean" } },
   allowPositionals: true,
   strict: false,
 });
@@ -42,7 +45,7 @@ if (values.help || command === undefined) {
   process.stdout.write(USAGE);
 } else if (command === "collect") {
   guard(() => exclusive(() => printCollected(collect(process.env))));
-} else if (command === "run" && values.repo !== undefined && typeof values.repo !== "string") {
+} else if ((command === "run" || command === "ack") && values.repo !== undefined && typeof values.repo !== "string") {
   process.stderr.write("--repo には owner/name の形でリポジトリを指定してください。\n");
   process.exitCode = 1;
 } else if (command === "run") {
@@ -56,6 +59,7 @@ if (values.help || command === undefined) {
           onProgress: printProgress,
           ...(repo === undefined ? {} : { repo }),
         }),
+        values.scheduled === true,
       ),
     ),
   );
@@ -77,6 +81,8 @@ if (values.help || command === undefined) {
   });
 } else if (command === "schedule") {
   guard(() => printSchedule());
+} else if (command === "ack") {
+  guard(() => printAck(typeof values.repo === "string" ? values.repo : resolveRepo(process.cwd())));
 } else {
   process.stderr.write(`不明なコマンドです: ${command}\n使えるコマンドは arefine --help で確認してください。\n`);
   process.exitCode = 1;
@@ -137,7 +143,23 @@ function printProgress(progress: RunProgress): void {
   process.stderr.write(`${message}\n`);
 }
 
-function printRun(summary: RunSummary): void {
+function printAck(repo: string | null): void {
+  if (repo === null) {
+    process.stderr.write(
+      "このフォルダのリポジトリが分かりません。git remote の origin があるフォルダで実行するか、--repo owner/name で指定してください。\n",
+    );
+    process.exitCode = 1;
+    return;
+  }
+  const { proposals } = markRead(repoDir(home, repo));
+  process.stdout.write(
+    proposals === 0
+      ? `${repo} にまだ読んでいない提案はありません。\n`
+      : `${repo} の提案 ${proposals} 件を読んだことにしました。\n`,
+  );
+}
+
+function printRun(summary: RunSummary, scheduled: boolean): void {
   printCollected(summary.collected);
   for (const name of summary.missing) {
     process.stderr.write(`config.yaml で有効にした観点 ${name} が見つかりません。名前と custom_refiners を確認してください。\n`);
@@ -146,6 +168,10 @@ function printRun(summary: RunSummary): void {
     process.stdout.write(
       `有効な観点がないため、ここで止めました。\n${configFile(arefineHome(process.env))} で観点を有効にしてください（例: refiners: { lint: { enabled: true } }）。\n`,
     );
+    if (scheduled) {
+      process.stderr.write("定期実行で何もできなかったため、失敗として終わります。観点を有効にするか、定期実行をやめてください。\n");
+      process.exitCode = 1;
+    }
     return;
   }
   if (summary.repoNotFound !== null) {
