@@ -7,7 +7,7 @@ export const Source = z.enum(["claude-session", "codex-session", "self-review", 
 
 export const GuidanceId = z.string().regex(/^G-\d{3}$/, "guidance ID は G-012 のように、G- と3桁の数字で書いてください");
 
-export const RiskKind = z.enum(["data-loss", "outbound", "leak"]);
+export const RiskKind = z.enum(["data-loss", "leak", "outbound"]);
 
 export const Evidence = z.object({ violation: z.string().min(1), fix: z.string().min(1).nullable() });
 
