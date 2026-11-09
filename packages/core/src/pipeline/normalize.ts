@@ -6,7 +6,7 @@ import type { Budget } from "./budget.ts";
 import { Candidate } from "./collect.ts";
 import { parseJson, readNewLineEntries } from "./jsonl.ts";
 import type { LineEntry } from "./jsonl.ts";
-import { observationsFile, readObservations } from "./observation.ts";
+import { RiskKind, observationsFile, readObservations } from "./observation.ts";
 import type { Observation } from "./observation.ts";
 import { readProgress, writeProgress } from "./progress.ts";
 
@@ -39,11 +39,34 @@ stated_as_rule は、人間がその方針を、これから先も守るルー�
 - 「テストのファイル名、.spec じゃなくて .test にして」→ false
 - 「今後はテストのファイル名を必ず .test にして」→ true
 - 「本番の DB に向けてコマンドを流さないで」→ false
-- 「本番の DB に向けたコマンドは二度と流さないで。覚えておいて」→ true`;
+- 「本番の DB に向けたコマンドは二度と流さないで。覚えておいて」→ true
+
+risk_kind は、AI がその方針に反したときに、次の 3 種類のどれが起きるかを表します。どれにも当たらなければ null にします。
+方針がどれだけ重要か、どれだけ深刻かでは判定しません。方針が扱っている操作が、どの種類に入るかだけを見ます。
+- data-loss：データや履歴が消える・書き換わる。ファイルやフォルダの削除、git reset --hard、未コミットの変更を捨てる、force push（自分のブランチへのものも含む）、rebase や amend で push 済みの履歴を書き換える、DB のデータの削除や上書き
+- leak：秘密情報や外に出せない情報が、手元の外に出る。トークン・鍵・パスワード・.env の中身、別のリポジトリや顧客の名前、生のログを、コミット・投稿・外部のサービスに含める
+- outbound：手元の外に反映・送信される。push・merge、本番へのデプロイ、本番の DB に向けたコマンド、パッケージの publish、Slack への投稿、issue や PR へのコメント、メールの送信
+2 つ以上に当たるときは、data-loss、leak、outbound の順に見て最初に当たったものにします。
+リポジトリの中のコードやドキュメントを編集することは、data-loss に入れません。
+方針に反したときに何も消えず、何も外に出ないなら、操作の名前が出てきても null にします。
+
+- 「そのブランチ、force push しなくていいよ」→ data-loss
+- 「待って、そこは共有のブランチだから rebase しないで」→ data-loss
+- 「API キーをテストのコードに直接書かないで」→ leak
+- 「main に直接 push しないで」→ outbound
+- 「PR にコメントを書く前に、文面を見せて」→ outbound
+- 「コミットメッセージに絵文字を入れないで」→ null
+- 「作業が終わったら一時フォルダは消しておいて」→ null
+- 「トークンの消費を抑えるために、大きいファイルを丸ごと読まないで」→ null`;
 
 const NormalizeOutput = z.object({
   observations: z.array(
-    z.object({ candidate_id: z.string(), summary: z.string().min(1), stated_as_rule: z.boolean() }),
+    z.object({
+      candidate_id: z.string(),
+      summary: z.string().min(1),
+      stated_as_rule: z.boolean(),
+      risk_kind: RiskKind.nullable(),
+    }),
   ),
 });
 
@@ -148,6 +171,7 @@ function normalizeBatch(batch: LineEntry[], repo: string, llm: Llm, maxBudgetUsd
           guidance_id: null,
           summary: item.summary,
           stated_as_rule: item.stated_as_rule,
+          risk_kind: item.risk_kind,
           ref: { candidate: candidate.id, session: candidate.ref.session, log: candidate.ref.log },
         }),
       );

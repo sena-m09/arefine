@@ -18,6 +18,7 @@ const CONTRACT = `## aRefine から渡すものと返してほしいもの
 入力には、対象のリポジトリ名、作業フォルダ、この観点の設定、指示のまとまり、今回まとまりに入った observation の一覧が入っています。
 observation は、人間が AI に出した修正指示を 1 件ずつまとめたもので、group は入ったまとまりの id です。
 stated_as_rule が true の observation は、人間が「今後は」「必ず」のように、これから先も守るルールとして言い切った指示です。
+risk_kind が null でない observation は、AI が反すると取り返しのつかない操作や情報の漏れにつながる指示です。data-loss（データや履歴が消える・書き換わる）、leak（秘密情報や外に出せない情報が手元の外に出る）、outbound（手元の外に反映・送信される）のどれに当たるかを表します。
 指示のまとまりは、中身が同じ指示の observation を、実行をまたいで集めたものです。
 今回 observation が入ったまとまりと、前に判定したまとまりだけを渡します。
 id（I-001 など）、指示の中身の 1 文（summary）、対応する guidance ID（guidance_id）、これまでの件数（count）、今回入った件数（added）を持ちます。

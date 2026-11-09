@@ -9,7 +9,13 @@ import { run } from "../src/pipeline/run.ts";
 import type { RunOptions, RunProgress } from "../src/pipeline/run.ts";
 
 const PromptCandidates = z.array(z.object({ id: z.string(), text: z.string() }));
-const ObservationLine = z.object({ id: z.string(), summary: z.string(), source: z.string(), stated_as_rule: z.boolean() });
+const ObservationLine = z.object({
+  id: z.string(),
+  summary: z.string(),
+  source: z.string(),
+  stated_as_rule: z.boolean(),
+  risk_kind: z.string().nullable(),
+});
 
 type Outcome = "ok" | "fail";
 
@@ -57,6 +63,7 @@ function setup(options: { config?: string; costUsd?: number } = {}) {
               candidate_id: candidate.id,
               summary: candidate.text,
               stated_as_rule: candidate.text.startsWith("今後は"),
+              risk_kind: candidate.text.includes("force push") ? "data-loss" : null,
             })),
         },
       };
@@ -161,7 +168,12 @@ type GroupingReply = {
 type Group = (input: GroupingInput) => GroupingReply;
 
 const RefinerGroup = z.object({ id: z.string(), count: z.number(), added: z.number(), state: z.unknown().optional() });
-const RefinerObservation = z.object({ group: z.string(), summary: z.string(), stated_as_rule: z.boolean() });
+const RefinerObservation = z.object({
+  group: z.string(),
+  summary: z.string(),
+  stated_as_rule: z.boolean(),
+  risk_kind: z.string().nullable(),
+});
 type RefinerInput = { groups: z.infer<typeof RefinerGroup>[]; observations: z.infer<typeof RefinerObservation>[] };
 type RefinerReply = {
   judgments: { group: string; guidance_id: string | null; trackable: boolean; state: Record<string, unknown> }[];
@@ -256,7 +268,19 @@ describe("arefine run", () => {
     ]);
   });
 
-  test("印を持たない以前の observation も、言い切っていない指示として観点に渡す", () => {
+  test("取り返しのつかない操作につながる指示には、observation にその種類を残す", () => {
+    const { addCandidates, observations, run } = setup();
+    addCandidates("共有のブランチに force push しないで", "any を使わないで");
+
+    run();
+
+    expect(observations().map(({ summary, risk_kind }) => ({ summary, risk_kind }))).toEqual([
+      { summary: "共有のブランチに force push しないで", risk_kind: "data-loss" },
+      { summary: "any を使わないで", risk_kind: null },
+    ]);
+  });
+
+  test("印を持たない以前の observation も、言い切っておらず取り返しのつく指示として観点に渡す", () => {
     const { repoDir, addCandidates, refinerInputs, readReport, run } = setup();
     addCandidates("ありがとう");
     const observation = {
@@ -270,14 +294,24 @@ describe("arefine run", () => {
     };
     writeFileSync(
       join(repoDir, "observations.jsonl"),
-      [{ ...observation, id: "obs_old_1" }, { ...observation, id: "obs_new_1", stated_as_rule: true }]
+      [
+        { ...observation, id: "obs_old_1" },
+        { ...observation, id: "obs_new_1", stated_as_rule: true, risk_kind: "outbound" },
+      ]
         .map((line) => `${JSON.stringify(line)}\n`)
         .join(""),
     );
 
     run();
 
-    expect(refinerInputs().at(-1)?.observations.map(({ stated_as_rule }) => stated_as_rule)).toEqual([false, true]);
+    expect(
+      refinerInputs()
+        .at(-1)
+        ?.observations.map(({ stated_as_rule, risk_kind }) => ({ stated_as_rule, risk_kind })),
+    ).toEqual([
+      { stated_as_rule: false, risk_kind: null },
+      { stated_as_rule: true, risk_kind: "outbound" },
+    ]);
     expect(readReport("2026-11-06.md")).toContain("`obs_old_1`");
   });
 
