@@ -225,8 +225,8 @@ launchctl bootout gui/$(id -u)/com.github.sena-m09.arefine.run                  
 rm ~/Library/LaunchAgents/com.github.sena-m09.arefine.run.plist
 ```
 
-- 頻度は config.yaml の `schedule` から plist を作るときに決まる。頻度を変えたときや Node を入れ替えたときは、`arefine schedule` をやり直し、bootout してから bootstrap し直す
-- 時刻を決めて動かす（`StartCalendarInterval`）。スリープ中に過ぎた分は、起きたときに1回だけ動く
+- 頻度と時刻は config.yaml の `schedule` と `schedule_time` から plist を作るときに決まる。頻度や時刻を変えたときや Node を入れ替えたときは、`arefine schedule` をやり直し、bootout してから bootstrap し直す
+- 時刻を決めて動かす（`StartCalendarInterval`）。時刻はそのマシンのローカル時刻で、スリープ中に過ぎた分は、起きたときに1回だけ動く
 - launchd から起動すると PATH がほぼ空になり、`claude` と `git` が見つからない。そのため plist に、書き出したときの `PATH` と、設定されていれば `AREFINE_HOME`・`CLAUDE_CONFIG_DIR` を書く。Node と cli.ts も絶対パスで書くので、plist は使い続けるチェックアウトで書き出す
 - 出力は `~/.arefine/logs/run.log` に追記する。各回の頭に日時の行を書く
 - 失敗したときだけ macOS の通知を出す（下を参照）
@@ -338,7 +338,7 @@ dispatch は、観点ごとに2回 `claude -p` を呼ぶ。1回目で、まだ�
 
 | 置き場所 | 用途 |
 | --- | --- |
-| `~/.arefine/config.yaml` | ユーザー単位。観点の有効化、自作観点の追加、定期実行の頻度 |
+| `~/.arefine/config.yaml` | ユーザー単位。観点の有効化、自作観点の追加、定期実行の頻度と時刻 |
 | `<repo>/.arefine/config.yaml` | プロジェクト単位。ユーザー設定を上書きする（プロジェクト導入後） |
 
 ```yaml
@@ -353,9 +353,10 @@ refiners:
 custom_refiners:
   - ~/dev/my-refiners/context
 schedule: weekly
+schedule_time: "08:30"
 ```
 
-`budget_usd` は1回の実行で LLM に使ってよい金額の上限（ドル）で、既定は1。`schedule` は定期実行の頻度で、`daily`（毎日 3:00、既定）か `weekly`（毎週月曜 3:00）。`enabled` 以外の観点の設定は、コアは読まずにそのまま観点に渡す。
+`budget_usd` は1回の実行で LLM に使ってよい金額の上限（ドル）で、既定は1。`schedule` は定期実行の頻度で、`daily`（毎日、既定）か `weekly`（毎週月曜）。`schedule_time` は動かす時刻で、`"08:30"` や `"8:30"` のように 0:00〜23:59 で書き、既定は 3:00。`enabled` 以外の観点の設定は、コアは読まずにそのまま観点に渡す。
 
 1回の実行で使った LLM の費用を足し合わせ、上限に達したらそれ以降の呼び出しを始めない。処理しきれなかった候補と observation は次の実行に回す。上限に達する直前の呼び出しは最後まで実行するので、使う金額は上限を1回分の呼び出し（数セント）ほど超えることがある。`claude -p` の `--max-budget-usd` には残りの金額ではなく上限そのものを渡し、1回の呼び出しが上限を超えて続いたときの歯止めにだけ使う。`--max-budget-usd` は超えた時点で結果を捨てて止めるので、残りの金額を渡すと、上限の直前の呼び出しが費用だけかかって結果を残さない。
 
@@ -481,6 +482,7 @@ arefine/
 - observation の `evidence` は M2 では持たず、M3 のセルフレビュー取り込みで足す（「observation の形式」を参照）
 - セルフレビューの結果は `arefine observe` に JSON で渡し、`source: self-review` の observation にする。同じ結果を送り直しても重複しないよう、`id` は `session` を含む中身から作り、`session` は必須にする（「セルフレビューの取り込み」を参照）
 - 定期実行の頻度は既定で1日1回。config.yaml の `schedule` で `weekly` にも変えられる（「定期実行」を参照）
+- 定期実行の時刻は既定で 3:00。`schedule` を頻度と時刻の組に広げず、`schedule_time` という別のキーにする。`schedule: daily` だけの設定ファイルをそのまま読め、時刻を誤ったときのエラーにもキー名が出るため。weekly の曜日は月曜のままにし、選べるようにはしない。曜日を変えたいという必要がまだ出ていないため（「設定」を参照）
 - 定期実行は launchd で行う。Label はほかの人に配る前提で、ほかのジョブと名前がぶつからない逆ドメインの形 `com.github.sena-m09.arefine.run` にする。plist は `~/Library/LaunchAgents/com.github.sena-m09.arefine.run.plist`、出力は `~/.arefine/logs/run.log` に置く。登録は利用者が `launchctl bootstrap` で行う（「定期実行」を参照）
 - collect と run は `~/.arefine/run.lock` で同時に1つしか動かさない（「定期実行」を参照）
 - 人がルールとして言い切った指示は、件数が `threshold` に届いていなくても lint 観点が提案にする。言い切りかどうかは normalize で observation の `stated_as_rule` に残す（「最初の観点：lint 化」を参照）
