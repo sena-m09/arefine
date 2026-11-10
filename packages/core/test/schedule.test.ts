@@ -83,13 +83,25 @@ describe("arefine schedule", () => {
     expect(readPlist()).toMatch(/<key>Hour<\/key>\s*<integer>8<\/integer>\s*<key>Minute<\/key>\s*<integer>30<\/integer>/);
   });
 
-  test("schedule_time が 0:00〜23:59 の時刻でなければ、どの項目かを示して止め、plist を書かない", () => {
-    const { arefine, plist } = setup('schedule_time: "24:00"\n');
+  test('schedule_time は時をゼロ埋めしない "8:05" でも受け、分をゼロ埋めして表示する', () => {
+    const { arefine, readPlist } = setup('schedule_time: "8:05"\n');
+
+    const result = arefine("schedule");
+
+    expect(result.stdout).toContain('頻度: 毎日 8:05（config.yaml の schedule: daily, schedule_time: "8:05"）');
+    expect(readPlist()).toMatch(/<key>Hour<\/key>\s*<integer>8<\/integer>\s*<key>Minute<\/key>\s*<integer>5<\/integer>/);
+  });
+
+  test.each([
+    { written: '"24:00"', shown: "24:00" },
+    { written: "0830", shown: "830" },
+  ])("schedule_time: $written は時刻として読めないので、書き方を示して止め、plist を書かない", ({ written, shown }) => {
+    const { arefine, plist } = setup(`schedule_time: ${written}\n`);
 
     const result = arefine("schedule");
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('schedule_time: "08:30" のように 0:00〜23:59 の時刻で書いてください（いまの値: 24:00）');
+    expect(result.stderr).toContain(`schedule_time: "08:30" のように 0:00〜23:59 の時刻で書いてください（いまの値: ${shown}）`);
     expect(() => readFileSync(plist)).toThrow();
   });
 

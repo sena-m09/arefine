@@ -109,9 +109,10 @@ function exclusive(action: () => void): void {
 function printSchedule(): void {
   const { schedule, schedule_time: time } = loadConfig(home);
   const { plist, log } = writePlist(process.env, home, schedule, time);
-  const when = `${schedule === "daily" ? "毎日" : "毎週月曜"} ${time.hour}:${String(time.minute).padStart(2, "0")}`;
+  const clock = `${time.hour}:${String(time.minute).padStart(2, "0")}`;
+  const when = `${schedule === "daily" ? "毎日" : "毎週月曜"} ${clock}`;
   process.stdout.write(`定期実行の設定を書き出しました: ${plist}
-頻度: ${when}（config.yaml の schedule と schedule_time で変えられます）。スリープ中だった分は、起きたときに1回だけ動きます。
+頻度: ${when}（config.yaml の schedule: ${schedule}, schedule_time: "${clock}"）。スリープ中だった分は、起きたときに1回だけ動きます。
 ログ: ${log}
 
 登録するには:

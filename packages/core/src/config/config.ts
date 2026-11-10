@@ -11,10 +11,12 @@ export type Schedule = z.infer<typeof Schedule>;
 
 export type ScheduleTime = { hour: number; minute: number };
 
-const ScheduleTime = z.string().transform((text, ctx): ScheduleTime => {
+const timeError = (value: unknown) => `"08:30" のように 0:00〜23:59 の時刻で書いてください（いまの値: ${String(value)}）`;
+
+const ScheduleTime = z.string({ error: (issue) => timeError(issue.input) }).transform((text, ctx): ScheduleTime => {
   const [, hour, minute] = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(text) ?? [];
   if (hour === undefined || minute === undefined) {
-    ctx.addIssue({ code: "custom", message: `"08:30" のように 0:00〜23:59 の時刻で書いてください（いまの値: ${text}）` });
+    ctx.addIssue({ code: "custom", message: timeError(text) });
     return z.NEVER;
   }
   return { hour: Number(hour), minute: Number(minute) };
