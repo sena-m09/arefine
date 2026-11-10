@@ -107,11 +107,12 @@ function exclusive(action: () => void): void {
 }
 
 function printSchedule(): void {
-  const { schedule } = loadConfig(home);
-  const { plist, log } = writePlist(process.env, home, schedule);
-  const when = schedule === "daily" ? "毎日 3:00" : "毎週月曜 3:00";
+  const { schedule, schedule_time: time } = loadConfig(home);
+  const { plist, log } = writePlist(process.env, home, schedule, time);
+  const clock = `${time.hour}:${String(time.minute).padStart(2, "0")}`;
+  const when = `${schedule === "daily" ? "毎日" : "毎週月曜"} ${clock}`;
   process.stdout.write(`定期実行の設定を書き出しました: ${plist}
-頻度: ${when}（config.yaml の schedule: ${schedule}）。スリープ中だった分は、起きたときに1回だけ動きます。
+頻度: ${when}（config.yaml の schedule: ${schedule}, schedule_time: "${clock}"）。スリープ中だった分は、起きたときに1回だけ動きます。
 ログ: ${log}
 
 登録するには:
@@ -120,7 +121,7 @@ function printSchedule(): void {
   launchctl bootout gui/$(id -u)/${LABEL}
   rm "${plist}"
 
-頻度を変えたときや Node を入れ替えたときは、arefine schedule をもう一度実行し、bootout してから bootstrap し直してください。
+頻度や時刻を変えたときや Node を入れ替えたときは、arefine schedule をもう一度実行し、bootout してから bootstrap し直してください。
 `);
 }
 

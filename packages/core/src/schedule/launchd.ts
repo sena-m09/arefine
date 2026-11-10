@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Schedule } from "../config/config.ts";
+import type { Schedule, ScheduleTime } from "../config/config.ts";
 
 export const LABEL = "com.github.sena-m09.arefine.run";
 const CLI = fileURLToPath(new URL("../cli.ts", import.meta.url));
@@ -27,20 +27,20 @@ export function scheduleFiles(env: NodeJS.ProcessEnv, home: string): ScheduleFil
   };
 }
 
-export function writePlist(env: NodeJS.ProcessEnv, home: string, schedule: Schedule): ScheduleFiles {
+export function writePlist(env: NodeJS.ProcessEnv, home: string, schedule: Schedule, time: ScheduleTime): ScheduleFiles {
   const files = scheduleFiles(env, home);
   mkdirSync(dirname(files.plist), { recursive: true });
   mkdirSync(dirname(files.log), { recursive: true });
-  writeFileSync(files.plist, plist(env, home, schedule, files.log));
+  writeFileSync(files.plist, plist(env, home, schedule, time, files.log));
   return files;
 }
 
-function plist(env: NodeJS.ProcessEnv, home: string, schedule: Schedule, log: string): string {
+function plist(env: NodeJS.ProcessEnv, home: string, schedule: Schedule, time: ScheduleTime, log: string): string {
   const environment = ENV_KEYS.flatMap((key) => {
     const value = env[key];
     return value === undefined ? [] : [`    <key>${key}</key>\n    <string>${escape(value)}</string>`];
   });
-  const calendar = [...(schedule === "weekly" ? [["Weekday", 1]] : []), ["Hour", 3], ["Minute", 0]].map(
+  const calendar = [...(schedule === "weekly" ? [["Weekday", 1]] : []), ["Hour", time.hour], ["Minute", time.minute]].map(
     ([key, value]) => `    <key>${key}</key>\n    <integer>${value}</integer>`,
   );
   return `<?xml version="1.0" encoding="UTF-8"?>

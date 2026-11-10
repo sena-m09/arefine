@@ -41,7 +41,16 @@ refiners:
 
 `arefine run` を実行すると、セッションログの新しい分を読み、提案を `~/.arefine/<owner>__<repo>/reports/<日付>.md` に書きます。
 
-定期実行にするときは `arefine schedule` を実行し、表示された `launchctl bootstrap` のコマンドで登録してください。定期実行が失敗したときは、macOS の通知に「定期実行が失敗しました。ログ: …」と出ます。理由はそのログで確かめてください。
+定期実行にするときは `arefine schedule` を実行し、表示された `launchctl bootstrap` のコマンドで登録してください。既定では毎日 3:00 に動きます。頻度と時刻は config.yaml で変えられます。
+
+```yaml
+schedule: weekly        # daily（毎日）か weekly（毎週月曜）
+schedule_time: "08:30"  # そのマシンの時刻で 0:00〜23:59
+```
+
+頻度や時刻を変えたら、`arefine schedule` をもう一度実行し、表示された `launchctl bootout` と `launchctl bootstrap` で登録し直してください。
+
+定期実行が失敗したときは、macOS の通知に「定期実行が失敗しました。ログ: …」と出ます。理由はそのログで確かめてください。
 
 ## 提案をセッションの開始時に知らせる
 

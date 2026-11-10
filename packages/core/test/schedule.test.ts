@@ -52,15 +52,18 @@ function programArguments(plist: string): string[] {
 }
 
 describe("arefine schedule", () => {
-  test("毎日 run する plist を LaunchAgents に置き、登録と解除のコマンドを表示する", () => {
+  test("毎日 3:00 に run する plist を LaunchAgents に置き、登録と解除のコマンドを表示する", () => {
     const { arefine, plist, readPlist } = setup();
 
     const result = arefine("schedule");
 
     expect(result.status).toBe(0);
+    expect(result.stdout).toContain("頻度: 毎日 3:00");
     expect(result.stdout).toContain(`launchctl bootstrap gui/$(id -u) "${plist}"`);
     expect(result.stdout).toContain("launchctl bootout gui/$(id -u)/com.github.sena-m09.arefine.run");
-    expect(readPlist()).toMatch(/<key>StartCalendarInterval<\/key>\s*<dict>\s*<key>Hour<\/key>/);
+    expect(readPlist()).toMatch(
+      /<key>StartCalendarInterval<\/key>\s*<dict>\s*<key>Hour<\/key>\s*<integer>3<\/integer>\s*<key>Minute<\/key>\s*<integer>0<\/integer>/,
+    );
   });
 
   test("config.yaml で schedule: weekly にすると、週に1回だけ動く", () => {
@@ -69,6 +72,37 @@ describe("arefine schedule", () => {
     arefine("schedule");
 
     expect(readPlist()).toMatch(/<key>Weekday<\/key>\s*<integer>1<\/integer>/);
+  });
+
+  test("config.yaml の schedule_time に引用符なしで 08:30 と書くと、8:30 に動く", () => {
+    const { arefine, readPlist } = setup("schedule: weekly\nschedule_time: 08:30\n");
+
+    const result = arefine("schedule");
+
+    expect(result.stdout).toContain("頻度: 毎週月曜 8:30");
+    expect(readPlist()).toMatch(/<key>Hour<\/key>\s*<integer>8<\/integer>\s*<key>Minute<\/key>\s*<integer>30<\/integer>/);
+  });
+
+  test('schedule_time は時をゼロ埋めしない "8:05" でも受け、分をゼロ埋めして表示する', () => {
+    const { arefine, readPlist } = setup('schedule_time: "8:05"\n');
+
+    const result = arefine("schedule");
+
+    expect(result.stdout).toContain('頻度: 毎日 8:05（config.yaml の schedule: daily, schedule_time: "8:05"）');
+    expect(readPlist()).toMatch(/<key>Hour<\/key>\s*<integer>8<\/integer>\s*<key>Minute<\/key>\s*<integer>5<\/integer>/);
+  });
+
+  test.each([
+    { written: '"24:00"', shown: "24:00" },
+    { written: "0830", shown: "830" },
+  ])("schedule_time: $written は時刻として読めないので、書き方を示して止め、plist を書かない", ({ written, shown }) => {
+    const { arefine, plist } = setup(`schedule_time: ${written}\n`);
+
+    const result = arefine("schedule");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`schedule_time: "08:30" のように 0:00〜23:59 の時刻で書いてください（いまの値: ${shown}）`);
+    expect(() => readFileSync(plist)).toThrow();
   });
 
   test("launchd から起動しても claude と保存先が見つかるよう、いまの PATH と AREFINE_HOME を plist に書く", () => {
