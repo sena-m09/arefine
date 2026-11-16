@@ -257,6 +257,19 @@ describe("arefine run", () => {
     expect(readReport("2026-11-06.md")).toContain("`obs_c-fetch を直接呼ばないで_1`");
   });
 
+  test("発話は 1 件ずつ LLM に渡し、ほかの発話と並べて比べさせない", () => {
+    const { addCandidates, calls, run } = setup();
+    addCandidates("fetch を直接呼ばないで", "ありがとう", "any を使わないで");
+
+    run();
+
+    expect(
+      calls
+        .filter(isNormalize)
+        .map((call) => PromptCandidates.parse(JSON.parse(call.prompt)).map((candidate) => candidate.text)),
+    ).toEqual([["fetch を直接呼ばないで"], ["ありがとう"], ["any を使わないで"]]);
+  });
+
   test("今後のルールとして言い切った指示には、observation に印を付ける", () => {
     const { addCandidates, observations, run } = setup();
     addCandidates("今後は fetch を直接呼ばないで", "any を使わないで");
@@ -341,6 +354,25 @@ describe("arefine run", () => {
     expect(observations().map((observation) => observation.summary)).toEqual(["fetch を直接呼ばないで"]);
   });
 
+  test("途中の発話で LLM の呼び出しに失敗したら、そこまでの修正指示は残し、次の実行で失敗した発話から続ける", () => {
+    const { addCandidates, observations, calls, failNext, run } = setup();
+    addCandidates("fetch を直接呼ばないで", "any を使わないで", "let を使わないで");
+    failNext("ok", "fail");
+
+    const failed = run();
+    expect(failed.repos[0]?.normalize.pending).toBe(2);
+    expect(observations().map((observation) => observation.summary)).toEqual(["fetch を直接呼ばないで"]);
+    const normalizeCallsAfterFirstRun = calls.filter(isNormalize).length;
+
+    run();
+    expect(observations().map((observation) => observation.summary)).toEqual([
+      "fetch を直接呼ばないで",
+      "any を使わないで",
+      "let を使わないで",
+    ]);
+    expect(calls.filter(isNormalize)).toHaveLength(normalizeCallsAfterFirstRun + 2);
+  });
+
   test("観点の実行に失敗したら、レポートを書かず、次の実行で同じ observation から提案を出す", () => {
     const { addCandidates, reports, failNext, run } = setup();
     addCandidates("fetch を直接呼ばないで");
@@ -355,17 +387,17 @@ describe("arefine run", () => {
 
   test("費用の上限に達したら、残りの候補を次の実行に回す", () => {
     const { addCandidates, observations, run } = setup({
-      config: "budget_usd: 0.01\nrefiners:\n  sample:\n    enabled: true\n",
+      config: "budget_usd: 0.02\nrefiners:\n  sample:\n    enabled: true\n",
     });
-    addCandidates(...Array.from({ length: 25 }, (_, i) => `${i} 番目を直接呼ばないで`));
+    addCandidates(...Array.from({ length: 5 }, (_, i) => `${i} 番目を直接呼ばないで`));
 
     const first = run();
-    expect(first.spentUsd).toBeGreaterThanOrEqual(0.01);
-    expect(first.repos[0]?.normalize.pending).toBe(5);
-    expect(observations()).toHaveLength(20);
+    expect(first.spentUsd).toBeGreaterThanOrEqual(0.02);
+    expect(first.repos[0]?.normalize.pending).toBe(3);
+    expect(observations()).toHaveLength(2);
 
     run();
-    expect(observations()).toHaveLength(25);
+    expect(observations()).toHaveLength(4);
   });
 
   test("処理の進み具合を、ログの読み込み・修正指示の拾い出し・観点の実行の順に知らせる", () => {

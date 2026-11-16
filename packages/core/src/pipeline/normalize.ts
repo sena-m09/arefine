@@ -10,7 +10,7 @@ import { RiskKind, observationsFile, readObservations } from "./observation.ts";
 import type { Observation } from "./observation.ts";
 import { readProgress, writeProgress } from "./progress.ts";
 
-const BATCH_SIZE = 20;
+const PROGRESS_EVERY = 20;
 const MAX_TEXT_LENGTH = 2000;
 
 const SYSTEM_PROMPT = `あなたは、人間とコーディングエージェント（AI）の会話から、人間が AI に出した修正指示を拾う係です。
@@ -30,6 +30,9 @@ const SYSTEM_PROMPT = `あなたは、人間とコーディングエージェン
 拾わないものの例:
 - その作業だけの指示：「#123 を書き直して」「この節は docs/setup.md に移そう」「README のこの一文は削除して」「issue の 2 と 3 をまとめよう」「この PR では依存の更新はやめておこう」
 - 新しい作業の依頼、質問、了承の返事（「OK」「お願い」など）、雑談
+- これからどうするかの相談や提案：「エラーの文言は、もう少しやわらかくしたほうがいいと思う？」「通知の出し方を、いくつか案にして見せて」。問いかけの形でも、AI がしたこと・しようとしたことへの指摘なら、上の例のとおり拾います
+  - 「〜できるなら〜して」のような条件付きの頼み方は、相談や提案ではなく指示です。進め方の方針として読めるなら拾います：「型で表せるなら、実行時のチェックを足す前に型を直して」→ 型で表せる制約は、実行時のチェックを足す前に型で表す
+- 作業に入るのを待たせただけの発話：「案を見てから決めたいので、まだ手は付けないで」。その作業はあとで進めるものだからです。AI がしようとした操作そのものを止めた発話は、上のとおり拾います
 
 - 1 つの発話に別々の方針が複数あれば、方針ごとに分けます
 - summary は、方針を「〜しない」「〜する」の形で、会話を知らない人が読んでも分かる日本語の 1 文にします。issue 番号やファイル名のような、その作業だけの固有名は入れません
@@ -53,12 +56,18 @@ risk_kind は、AI がその方針に反したときに、次の 3 種類のど�
 リポジトリの中のコードやドキュメントを編集することは、data-loss に入れません。
 方針に反したときに何も消えず、何も外に出ないなら、操作の名前が出てきても null にします。
 手元の外に出す前に、人の承認を求める方針（見せてから投稿する、OK をもらってから PR を作る など）は outbound にします。テストや lint を通してから push するような、品質を確かめる方針は null にします。
+手元の外に出す操作を、誰の名前やどのアカウントで行うかを指定する方針は outbound にします。
+手元の外に出すものの分け方・まとめ方・書き方を指定する方針は null にします。出すかどうか、どこへ誰の名前で出すかを変える方針ではないためです。
+その作業のあいだだけ送信や投稿を控えさせる指定は null にします。
 
 - 「そのブランチ、force push しなくていいよ」→ data-loss
 - 「待って、そこは共有のブランチだから rebase しないで」→ data-loss
 - 「API キーをテストのコードに直接書かないで」→ leak
 - 「main に直接 push しないで」→ outbound
 - 「PR にコメントを書く前に、文面を見せて」→ outbound
+- 「リリースのタグは、個人のアカウントではなくチームのアカウントで打って」→ outbound
+- 「不具合の報告は、1 件ずつ別の issue にして」→ null
+- 「今回の動作確認では、メールは実際には送らないで」→ null
 - 「コミットメッセージに絵文字を入れないで」→ null
 - 「作業が終わったら一時フォルダは消しておいて」→ null
 - 「デプロイする前に、ステージングで型チェックとテストを通して」→ null
@@ -83,14 +92,14 @@ export type NormalizeResult = {
   error: string | null;
 };
 
-type BatchResult = { ok: true; observations: Observation[]; costUsd: number } | { ok: false; error: string; costUsd: number };
+type CandidateResult = { ok: true; observations: Observation[]; costUsd: number } | { ok: false; error: string; costUsd: number };
 
 export function normalizeRepo(
   dir: string,
   repo: string,
   llm: Llm,
   budget: Budget,
-  onBatch: (done: number, total: number) => void = () => {},
+  onProgress: (done: number, total: number) => void = () => {},
 ): NormalizeResult {
   const file = join(dir, "candidates.jsonl");
   if (!existsSync(file)) {
@@ -98,17 +107,18 @@ export function normalizeRepo(
   }
   const progress = readProgress(dir);
   const entries = readNewLineEntries(file, progress.normalized).entries.filter((entry) => entry.text.trim() !== "");
-  const batches = chunk(entries, BATCH_SIZE);
   const known = new Set(readObservations(dir).map((observation) => observation.id));
 
   const done: { size: number; observations: number; costUsd: number }[] = [];
   const failures: string[] = [];
-  for (const [i, batch] of batches.entries()) {
+  for (const [i, entry] of entries.entries()) {
     if (budget.exhausted) {
       break;
     }
-    onBatch(i * BATCH_SIZE, entries.length);
-    const result = normalizeBatch(batch, repo, llm, budget.limitUsd);
+    if (i % PROGRESS_EVERY === 0) {
+      onProgress(i, entries.length);
+    }
+    const result = normalizeCandidate(entry, repo, llm, budget.limitUsd);
     budget.charge(result.costUsd);
     if (!result.ok) {
       failures.push(result.error);
@@ -120,8 +130,8 @@ export function normalizeRepo(
     for (const observation of fresh) {
       known.add(observation.id);
     }
-    writeProgress(dir, { ...readProgress(dir), normalized: batch.at(-1)?.end ?? progress.normalized });
-    done.push({ size: batch.length, observations: fresh.length, costUsd: result.costUsd });
+    writeProgress(dir, { ...readProgress(dir), normalized: entry.end });
+    done.push({ size: 1, observations: fresh.length, costUsd: result.costUsd });
   }
 
   const processed = done.reduce((sum, batch) => sum + batch.size, 0);
@@ -134,21 +144,15 @@ export function normalizeRepo(
   };
 }
 
-function normalizeBatch(batch: LineEntry[], repo: string, llm: Llm, maxBudgetUsd: number): BatchResult {
-  const candidates = batch.flatMap((entry) => {
-    const candidate = Candidate.safeParse(parseJson(entry.text));
-    return candidate.success ? [candidate.data] : [];
-  });
-  if (candidates.length === 0) {
+function normalizeCandidate(entry: LineEntry, repo: string, llm: Llm, maxBudgetUsd: number): CandidateResult {
+  const parsed = Candidate.safeParse(parseJson(entry.text));
+  if (!parsed.success) {
     return { ok: true, observations: [], costUsd: 0 };
   }
+  const candidate = parsed.data;
   const result = llm({
     system: SYSTEM_PROMPT,
-    prompt: JSON.stringify(
-      candidates.map((candidate) => ({ id: candidate.id, kind: candidate.kind, text: truncate(candidate.text) })),
-      null,
-      2,
-    ),
+    prompt: JSON.stringify([{ id: candidate.id, kind: candidate.kind, text: truncate(candidate.text) }], null, 2),
     schema: z.toJSONSchema(NormalizeOutput),
     maxBudgetUsd,
   });
@@ -159,36 +163,25 @@ function normalizeBatch(batch: LineEntry[], repo: string, llm: Llm, maxBudgetUsd
   if (!output.success) {
     return { ok: false, error: "normalize の LLM の出力が想定した形式ではありません", costUsd: result.costUsd };
   }
-  const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
-  const observations = [...Map.groupBy(output.data.observations, (item) => item.candidate_id)].flatMap(
-    ([candidateId, items]) => {
-      const candidate = byId.get(candidateId);
-      if (candidate === undefined) {
-        return [];
-      }
-      return items.map(
-        (item, i): Observation => ({
-          id: `obs_${candidate.id}_${i + 1}`,
-          at: candidate.at,
-          source: candidate.source,
-          repo,
-          cwd: candidate.cwd,
-          guidance_id: null,
-          summary: item.summary,
-          stated_as_rule: item.stated_as_rule,
-          risk_kind: item.risk_kind,
-          ref: { candidate: candidate.id, session: candidate.ref.session, log: candidate.ref.log },
-        }),
-      );
-    },
-  );
+  const observations = output.data.observations
+    .filter((item) => item.candidate_id === candidate.id)
+    .map(
+      (item, i): Observation => ({
+        id: `obs_${candidate.id}_${i + 1}`,
+        at: candidate.at,
+        source: candidate.source,
+        repo,
+        cwd: candidate.cwd,
+        guidance_id: null,
+        summary: item.summary,
+        stated_as_rule: item.stated_as_rule,
+        risk_kind: item.risk_kind,
+        ref: { candidate: candidate.id, session: candidate.ref.session, log: candidate.ref.log },
+      }),
+    );
   return { ok: true, observations, costUsd: result.costUsd };
 }
 
 function truncate(text: string): string {
   return text.length > MAX_TEXT_LENGTH ? `${text.slice(0, MAX_TEXT_LENGTH)}…（以下省略）` : text;
-}
-
-export function chunk<T>(items: T[], size: number): T[][] {
-  return Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, (i + 1) * size));
 }
