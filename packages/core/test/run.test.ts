@@ -15,6 +15,7 @@ const ObservationLine = z.object({
   source: z.string(),
   stated_as_rule: z.boolean(),
   risk_kind: z.string().nullable(),
+  invocations: z.unknown().optional(),
 });
 
 type Outcome = "ok" | "fail";
@@ -174,6 +175,7 @@ const RefinerObservation = z.object({
   summary: z.string(),
   stated_as_rule: z.boolean(),
   risk_kind: z.string().nullable(),
+  invocations: z.unknown().optional(),
 });
 type RefinerInput = { groups: z.infer<typeof RefinerGroup>[]; observations: z.infer<typeof RefinerObservation>[] };
 type RefinerReply = {
@@ -291,6 +293,61 @@ describe("arefine run", () => {
     expect(observations().map(({ summary, risk_kind }) => ({ summary, risk_kind }))).toEqual([
       { summary: "共有のブランチに force push しないで", risk_kind: "data-loss" },
       { summary: "any を使わないで", risk_kind: null },
+    ]);
+  });
+
+  test("発話のときに動いていた skill / agent を observation に写して観点に渡し、記録のない以前の候補では null にする", () => {
+    const { repoDir, addCandidates, observations, refinerInputs, run } = setup();
+    addCandidates("any を使わないで");
+    writeFileSync(
+      join(repoDir, "candidates.jsonl"),
+      `${JSON.stringify({
+        id: "c-skill",
+        kind: "prompt",
+        at: "2026-11-01T10:00:00.000Z",
+        source: "claude-session",
+        repo: "acme/widget",
+        cwd: "/home/user/example",
+        text: "fetch を直接呼ばないで",
+        ref: { session: "s-1", log: "/home/user/.claude/projects/example/s-1.jsonl" },
+        invocations: {
+          active: [{ kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" }],
+          recent: [
+            { kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" },
+            { kind: "agent", name: "Explore", dir: null },
+          ],
+        },
+      })}\n`,
+      { flag: "a" },
+    );
+
+    run();
+
+    expect(observations().map(({ summary, invocations }) => ({ summary, invocations }))).toEqual([
+      { summary: "any を使わないで", invocations: null },
+      {
+        summary: "fetch を直接呼ばないで",
+        invocations: {
+          active: [{ kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" }],
+          recent: [
+            { kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" },
+            { kind: "agent", name: "Explore", dir: null },
+          ],
+        },
+      },
+    ]);
+    expect(refinerInputs().at(-1)?.observations.map(({ summary, invocations }) => ({ summary, invocations }))).toEqual([
+      { summary: "any を使わないで", invocations: null },
+      {
+        summary: "fetch を直接呼ばないで",
+        invocations: {
+          active: [{ kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" }],
+          recent: [
+            { kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" },
+            { kind: "agent", name: "Explore", dir: null },
+          ],
+        },
+      },
     ]);
   });
 

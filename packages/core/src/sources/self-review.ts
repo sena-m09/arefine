@@ -28,6 +28,7 @@ export function selfReviewObservations(review: SelfReview, repo: string, cwd: st
       summary: finding.summary,
       stated_as_rule: false,
       risk_kind: null,
+      invocations: null,
       ...(finding.evidence === undefined ? {} : { evidence: finding.evidence }),
       ref: { candidate: null, session: review.session, log: null },
     }),

@@ -9,6 +9,12 @@ export const GuidanceId = z.string().regex(/^G-\d{3}$/, "guidance ID „ÅØ G-012 „
 
 export const RiskKind = z.enum(["data-loss", "leak", "outbound"]);
 
+export const Invocation = z.object({ kind: z.enum(["skill", "agent"]), name: z.string(), dir: z.string().nullable() });
+export type Invocation = z.infer<typeof Invocation>;
+
+export const Invocations = z.object({ active: z.array(Invocation), recent: z.array(Invocation) });
+export type Invocations = z.infer<typeof Invocations>;
+
 export const Evidence = z.object({ violation: z.string().min(1), fix: z.string().min(1).nullable() });
 
 export const Observation = z.object({
@@ -22,6 +28,7 @@ export const Observation = z.object({
   stated_as_rule: z.boolean().default(false),
   risk_kind: RiskKind.nullable().default(null),
   evidence: Evidence.optional(),
+  invocations: Invocations.nullable().default(null),
   ref: z.object({ candidate: z.string().nullable(), session: z.string(), log: z.string().nullable() }),
 });
 

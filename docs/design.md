@@ -40,12 +40,12 @@ lint 化の観点の詳しい経緯と既存ツール調査は、別ドキュメ
 
 ### 処理の流れ
 
-1. collect：入力ソースから前回以降の新しい分だけ読む（読み込み位置を記録）。normalize の1段目もここで行う
+1. collect：入力ソースから前回以降の新しい発話を取り出す（どこまで取り出したかを記録）。normalize の1段目もここで行う
 2. normalize：人間の修正指示・レビュー指摘を取り出し、observation に正規化する
 3. dispatch：有効な観点ごとに、新しい observation を指示のまとまりに振り分けてから観点を実行する（`claude -p` または `codex exec`）
 4. report：観点ごとの提案を Markdown のレポートにまとめる
 
-normalize は2段で行う。1段目はルールベースで、人間が打った発話と AskUserQuestion への回答だけを候補として取り出し、`candidates.jsonl` に追記する。ツールの結果、hook が差し込んだ文、バックグラウンド処理の通知、サブエージェントへの依頼文、slash command は含めない。2段目は LLM で、候補から修正指示を選んで observation にする。ログの大半は人間の発話ではないので、1段目で LLM に渡す量を減らしてコストを抑えられる。
+normalize は2段で行う。1段目はルールベースで、人間が打った発話と AskUserQuestion への回答だけを候補として取り出し、`candidates.jsonl` に追記する。ツールの結果、hook が差し込んだ文、バックグラウンド処理の通知、サブエージェントへの依頼文、slash command は含めない。slash command で起動した skill は、候補にはしないが、動いていた skill として次の発話の候補に記録する。2段目は LLM で、候補から修正指示を選んで observation にする。ログの大半は人間の発話ではないので、1段目で LLM に渡す量を減らしてコストを抑えられる。
 
 2段目は、候補を1件ずつ `claude -p` に渡し、修正指示を含むものだけを observation にして `observations.jsonl` に追記する。1つの発話に別々の指示があれば、指示ごとに observation を分ける。どこまで処理したかは、候補ごとに `progress.json` に記録する。LLM の呼び出しに失敗した候補は処理済みにしないので、次の実行でその候補からやり直す。observation の `id` は候補の `id` から決めるので、同じ候補を処理し直しても observation は重複しない。リポジトリが分からない候補（`_unknown/`）は、観点に渡しても提案の行き先がないので処理しない。
 
@@ -79,6 +79,10 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 
 セッションを再開・分岐すると、同じ発話（同じ `uuid`）が別のログファイルにも残る。collect は、すでに取り出した `uuid` の発話と、同じセッションで同じ文面を送り直した発話を取り出さない。観点は件数で提案するかを決めるので、同じ発話を何度も数えないようにするため。別のセッションで同じことを言ったものは、繰り返し出た指摘として別々に数える。
 
+候補には、発話の前後のやり取り・そのとき動いていた skill / agent・読み込まれていた指示ファイルを付ける（「候補（candidate）の形式」を参照）。発話だけでは、何に対する指示なのか、訂正が通ったのか、どこに書けば次から効くのかを決められないため。前後を読むために、collect は新しく書き込まれたログを先頭から読み直し、前回より後に書かれた発話だけを候補にする。手元のログ 272 ファイル（595MB）を初めて読むと 7.5 秒かかった。1日に書き込まれるのは 49 ファイル・125MB ほどで、定期実行で毎回読み直しても支障はない。
+
+最後の発話は、次の発話が来るか、ログに最後に書かれたレコードから 30 分たつまで候補にしない。返事がまだ書かれていない発話を候補にすると、候補は追記だけなので、あとから前後のやり取りを足せないため。30 分たてば、次の発話なしで候補にする。30 分は測っていない仮の値で、30 分以上あけて同じセッションで会話を続けた場合も、次の発話なしで候補になる。
+
 ログは zod のスキーマで読む。`origin.kind` が `human` のように人間の発話の印はあるのに、ほかのフィールドが想定と違うレコードは、取り出さずに件数だけ数え、`arefine collect` の出力で知らせる。ログの形式が変わったときに、発話を黙って読み飛ばさないようにするため。
 
 ### 入力ソース
@@ -105,14 +109,44 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
   "repo": "owner/repo",
   "cwd": "/Users/me/works/repo",
   "text": "コンポーネントで fetch を直接呼ばないで",
-  "ref": { "session": "…", "log": "/Users/me/.claude/projects/…/….jsonl" }
+  "ref": { "session": "…", "log": "/Users/me/.claude/projects/…/….jsonl" },
+  "context": {
+    "before": "…UserList で fetch を呼ぶようにしました。",
+    "commands": ["bun run test src/UserList.test.tsx"],
+    "after": "api/users.ts の関数を使うように直します。…",
+    "next": "テストも直して"
+  },
+  "invocations": {
+    "active": [{ "kind": "skill", "name": "build", "dir": "/Users/me/works/repo/.claude/skills/build" }],
+    "recent": [
+      { "kind": "skill", "name": "build", "dir": "/Users/me/works/repo/.claude/skills/build" },
+      { "kind": "agent", "name": "Explore", "dir": null }
+    ]
+  },
+  "instructions": [
+    { "path": "/Users/me/.claude/CLAUDE.md", "type": "User" },
+    { "path": "/Users/me/works/repo/AGENTS.md", "type": "Project" },
+    { "path": "/Users/me/works/repo/.claude/skills/build/SKILL.md", "type": "Skill" }
+  ]
 }
 ```
 
 - `id`：セッションログのレコードの `uuid`
 - `kind`：打った発話なら `prompt`、AskUserQuestion への回答なら `answer`。`answer` の `text` は「質問: …」「回答: …」「メモ: …」の行を質問ごとにまとめたもの
 - `repo`：分からなければ `null`（そのときは `_unknown/` に入る）
-- `ref.log`：元のセッションログのパス。発話の前後のやり取り（AI が何をしたか）を読むときに使う
+- `ref.log`：元のセッションログのパス
+- `context`：発話の前後のやり取り。前後の区切りは、人が打った発話（slash command を含む）と AskUserQuestion への回答にする
+  - `before`：前の区切りからこの発話までの AI の出力の、末尾 700 字。考えている途中の文と API エラーの通知は含めない
+  - `commands`：前の区切りからこの発話までに AI が実行しようとした Bash のコマンドの、最後の 3 件。1 件 500 字まで。結果が返っていない（人が止めた）コマンドも含める。`risk_kind` の判定で、何を止めた発話かを知るのに使う
+  - `after`：この発話から次の区切りまでの AI の出力の、先頭 700 字
+  - `next`：次の区切りの先頭 300 字。slash command なら「/名前 引数」の形。次の区切りがないまま 30 分たてば `null`
+- `invocations`：動いていた skill / agent。`active` は前の区切りからこの発話までに動いたもの、`recent` はセッションの初めからこの発話までに動いたものを、重複を除いて新しい順に 6 件まで
+  - `kind`：`skill` か `agent`
+  - `name`：skill は Skill ツールに渡した名前か slash command の名前、agent はサブエージェントの種類（指定がなければ `general-purpose`）
+  - `dir`：skill の置かれたフォルダ。どこにある skill か（リポジトリの中・ユーザー単位・プラグイン）を見分けるのに使う。同じセッションで呼び直した skill はログに置き場が残らないことがあるので、前に分かった置き場を引き継ぐ。agent と、置き場が一度も分からなかった skill は `null`
+- `instructions`：この発話に返答するときに読み込まれていた指示ファイルの、パスと種別。本文は持たない。種別は Claude Code のログの値（`User`・`Project`・`Local`・`AutoMem`）か、skill なら `Skill`。最後の compact より後に読み込まれたものだけを数える。書いてあるのに守られなかった指示を、書き直すか置き場を移すかを決める材料にする
+- 前後の長さと件数（700 字・700 字・300 字、Bash 3 件・500 字、`recent` 6 件）は、ひとまずの値
+- `context`・`invocations`・`instructions` を持たない古い行もそのまま読む。保存済みの候補に後から付け直すことはしない
 
 ### observation の形式
 
@@ -129,6 +163,10 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
   "summary": "コンポーネントで fetch を直接呼ばない",
   "stated_as_rule": false,
   "risk_kind": null,
+  "invocations": {
+    "active": [{ "kind": "skill", "name": "build", "dir": "/Users/me/works/repo/.claude/skills/build" }],
+    "recent": [{ "kind": "skill", "name": "build", "dir": "/Users/me/works/repo/.claude/skills/build" }]
+  },
   "ref": { "candidate": "1f0c…", "session": "…", "log": "/Users/me/.claude/projects/…/….jsonl" }
 }
 ```
@@ -147,6 +185,7 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
   "stated_as_rule": false,
   "risk_kind": null,
   "evidence": { "violation": "const user = data as User;", "fix": "const user = User.parse(data);" },
+  "invocations": null,
   "ref": { "candidate": null, "session": "…", "log": null }
 }
 ```
@@ -159,6 +198,7 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 - `stated_as_rule`：人が「今後は」「必ず」「二度と」「覚えておいて」「ルールにして」のように、これから先も守るルールとして言い切ったなら `true`。normalize の2段目で、発話の言い方から判定する。指示がどれだけ重要かでは判定しない。このフィールドがない古い行は `false` として読む。言い切りは人の発話の性質なので、セルフレビューからの observation は常に `false` にする
 - `risk_kind`：AI がその指示に反したときに起きることの種類。`data-loss`（データや履歴が消える・書き換わる）、`leak`（秘密情報や外に出せない情報が手元の外に出る）、`outbound`（手元の外に反映・送信される）のどれかで、どれにも当たらなければ `null`。normalize の2段目で判定する（「最初の観点：lint 化」を参照）。このフィールドがない古い行は `null` として読む。セルフレビューからの observation は、元の発話がないので常に `null` にする
 - `evidence`：違反したコード（`violation`）と、直したコード（`fix`、なければ `null`）。セルフレビューが渡したときだけ持つ。発話からは分からないので、セッションログからの observation には付けない
+- `invocations`：発話のときに動いていた skill / agent。候補の `invocations` を、normalize が LLM を通さずにそのまま写す（形は「候補（candidate）の形式」を参照）。観点が、動いていた skill を提案の置き場に選ぶときに使う。ログから読める事実で観点に依存しないので、共通形式に入れる。記録がない古い行・セルフレビュー・`arefine observe` からの observation は `null`、記録があって何も動いていなければ空の配列になる
 - `ref`：元の記録への参照。セルフレビューには元の候補とログがないので、`candidate` と `log` は `null`
 - observation は観点に依存しない共通形式にする。観点固有の情報はここに足さない
 
@@ -197,7 +237,7 @@ observation の `id` は、リポジトリ・`session`・`guidance_id`・`summar
 ```
 ~/.arefine/
 ├── config.yaml           # ユーザー単位の設定
-├── cursors.json          # セッションログのファイルごとの読み込み位置
+├── cursors.json          # セッションログのファイルごとに、どこまで候補にしたか
 ├── run.lock              # collect・run の実行中だけある。中身は実行している pid
 ├── logs/
 │   └── run.log           # 定期実行の出力
@@ -522,6 +562,9 @@ arefine/
 - SessionStart hook はプラグインの中で単体で動く TypeScript にし、コアを読み込まない。プラグインは GitHub の marketplace から入れ、cache にコピーされて動くため。形のずれは、コアと hook が同じフィクスチャを使うテストで防ぐ（「提案を知らせる」を参照）
 - `arefine` は PATH に入れて使う前提にし、知らせる文面に `arefine ack` をそのまま載せる
 - 定期実行が失敗したときだけ、macOS の通知を `osascript` で出す。plist から sh 経由で起動して終了コードを見るので、Node が見つからない場合も拾える。本文は「失敗しました。ログ: …」だけ。有効な観点がないまま定期実行が動いたときは、定期実行のときだけ失敗とする（「定期実行」を参照）
+- 候補に、発話の前後のやり取り・直前の AI の Bash のコマンド・動いていた skill / agent・読み込まれていた指示ファイルを持たせる。collect は新しく書き込まれたログを先頭から読み直し、最後の発話は次の発話が来るか 30 分たつまで候補にしない（「処理の流れ」「候補（candidate）の形式」を参照）
+- 動いていた skill / agent は、observation にも `invocations` として写し、観点ごとに出し分けずにすべての観点に渡す。ログから読める事実で観点に依存しないので、共通形式に入れても [G-002] に反しない。観点ごとに出し分けると、コアが観点の中身を知ることになる。skill は名前と一緒に置かれたフォルダを持たせる。名前だけでは、リポジトリの中の skill とユーザー単位の skill を見分けられないため
+- 読み込まれていた指示ファイルは、パスと種別だけを候補に持たせ、observation には写さない。ログは一定期間で消え、あとから取り直せないので、使い道が固まる前から記録しておく
 - 観点の状態は SQLite にせず JSON のままにする。observation は年に数千行、registry.json は指示の数だけと量が小さく、検索の速さは問題にならない。手で読めて grep でき、観点ごとの状態をリポジトリのフォルダに持つ作りとも合う。難しいのは検索の速さではなく、新しい指示が前のどの指示と同じかを決めることで、SQLite にしても解決しない。複数リポジトリの横断集計、埋め込みを使った検索、ファイルが数十 MB になったときに見直す
 
 ## 未決事項
@@ -535,5 +578,8 @@ arefine/
 - 指示のまとまりへの振り分けを誤ったときに直す手段。いまは registry.json を手で直す
 - normalize の2段目で、候補を1件ずつ渡しても、observation になるかどうかが回によって変わる候補が残る。手元の実際の候補 99 件を3回処理すると、3件が回によって変わった。長い依頼文に指定が混じった発話では、1つの発話から出る observation の数も回によって変わる（3回とも拾われた 15 件のうち4件）。複数回処理して多数決を取るか（#23）は決めていない
 - `stated_as_rule` の判定を、候補を1件ずつ渡す形で確かめ直すか。「毎回」を言い切りと読む例が架空の候補で1件あった。本番の環境変数を書き換える操作を `outbound` と `data-loss` のどちらにするかも決めていない
+- 候補に付ける前後のやり取りの長さ（700 字・700 字・300 字）、Bash のコマンドの件数と長さ（3 件・500 字）、`recent` の件数（6 件）、最後の発話を待つ時間（30 分）は、測らずに置いた仮の値。#28 で normalize に渡して測り直すときに見直す
+- slash command で skill を起動したログの形は、2.1.319 以前の実例でしか確かめていない。2.1.33x のログには実例がなく、形が変わっていれば、slash command で起動した skill を記録し損ねる
+- compact のあとも、paths 付きの rule が読み込まれたままになるかは確かめていない。いまは compact より前に読み込まれたものを `instructions` に数えないので、残っていれば記録から漏れる
 - normalize の呼び出しを同時に行うか。たまった候補を初めて処理するときは、1ドル分に 15〜22 分かかる。待ち時間が問題になったら見直す
 - 取り返しのつかない操作を止める指示を、AGENTS.md やリンターでなく、Claude Code の permissions や git の hook で止める提案にするか

@@ -1,10 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { arefineHome, repoDir } from "../config/paths.ts";
-import { claudeProjectsDir, listSessionLogs, parseLine } from "../sources/claude-code.ts";
-import type { Utterance, UtteranceKind } from "../sources/claude-code.ts";
-import { parseJson, readNewLines } from "./jsonl.ts";
+import { claudeProjectsDir, listSessionLogs, readSessionLog } from "../sources/claude-code.ts";
+import type { InstructionFile, TurnContext, Utterance, UtteranceKind } from "../sources/claude-code.ts";
+import { parseJson } from "./jsonl.ts";
+import { Invocations } from "./observation.ts";
 import { writeJsonAtomic } from "./progress.ts";
 import { resolveRepo } from "./repo.ts";
 
@@ -17,8 +18,17 @@ export const Candidate = z.object({
   cwd: z.string(),
   text: z.string(),
   ref: z.object({ session: z.string(), log: z.string() }),
+  context: z
+    .object({ before: z.string(), commands: z.array(z.string()), after: z.string(), next: z.string().nullable() })
+    .optional() satisfies z.ZodType<TurnContext | undefined>,
+  invocations: Invocations.optional(),
+  instructions: z
+    .array(z.object({ path: z.string(), type: z.string() }))
+    .optional() satisfies z.ZodType<InstructionFile[] | undefined>,
 });
 export type Candidate = z.infer<typeof Candidate>;
+
+const QUIET_MS = 30 * 60 * 1000;
 
 const Cursors = z.record(z.string(), z.number().int().nonnegative());
 type Cursors = z.infer<typeof Cursors>;
@@ -36,13 +46,17 @@ type LogDelta = {
   unreadable: number;
 };
 
-export function collect(env: NodeJS.ProcessEnv): CollectSummary {
+export function collect(env: NodeJS.ProcessEnv, now: Date = new Date()): CollectSummary {
   const home = arefineHome(env);
   const cursorsFile = join(home, "cursors.json");
   const cursors = readCursors(cursorsFile);
 
   const deltas = listSessionLogs(claudeProjectsDir(env))
-    .map((log) => readLogDelta(log, cursors[log] ?? 0))
+    .flatMap((log) => {
+      const offset = cursors[log] ?? 0;
+      const size = statSync(log).size;
+      return size === offset ? [] : [readLogDelta(log, size < offset ? 0 : offset, now)];
+    })
     .filter((delta) => delta.nextOffset !== (cursors[delta.log] ?? 0));
 
   const utterances = deltas.flatMap((delta) => delta.utterances.map((utterance) => ({ utterance, log: delta.log })));
@@ -99,14 +113,17 @@ function sameUtteranceKeys(candidate: Candidate): string[] {
   return [`id:${candidate.id}`, `text:${candidate.ref.session}:${candidate.text}`];
 }
 
-function readLogDelta(log: string, offset: number): LogDelta {
-  const { lines, nextOffset } = readNewLines(log, offset);
-  const parsed = lines.map(parseLine);
+function readLogDelta(log: string, offset: number, now: Date): LogDelta {
+  const session = readSessionLog(log);
+  const lastAt = Date.parse(session.lastAt ?? "");
+  const quiet = Number.isNaN(lastAt) || now.getTime() - lastAt >= QUIET_MS;
+  const fresh = session.turns.filter((turn) => turn.start >= offset);
+  const nextOffset = (quiet ? undefined : fresh.find((turn) => !turn.answered))?.start ?? session.end;
   return {
     log,
     nextOffset,
-    utterances: parsed.flatMap((line) => (line.kind === "utterance" ? [line.utterance] : [])),
-    unreadable: parsed.filter((line) => line.kind === "unreadable").length,
+    utterances: fresh.filter((turn) => turn.start < nextOffset).map((turn) => turn.utterance),
+    unreadable: session.unreadableStarts.filter((start) => start >= offset && start < nextOffset).length,
   };
 }
 
@@ -120,6 +137,9 @@ function toCandidate(utterance: Utterance, log: string, repo: string | null): Ca
     cwd: utterance.cwd,
     text: utterance.text,
     ref: { session: utterance.session, log },
+    context: utterance.context,
+    invocations: utterance.invocations,
+    instructions: utterance.instructions,
   };
 }
 
