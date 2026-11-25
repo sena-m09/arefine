@@ -9,11 +9,15 @@ import { collect } from "../src/pipeline/collect.ts";
 
 const Candidate = z.object({ text: z.string() });
 
-function human(text: string, cwd: string, { uuid = randomUUID(), session = "s-1" }: { uuid?: string; session?: string } = {}): string {
+function human(
+  text: string,
+  cwd: string,
+  { uuid = randomUUID(), session = "s-1", at = "2026-11-01T10:00:00.000Z" }: { uuid?: string; session?: string; at?: string } = {},
+): string {
   return `${JSON.stringify({
     type: "user",
     uuid,
-    timestamp: "2026-11-01T10:00:00.000Z",
+    timestamp: at,
     sessionId: session,
     cwd,
     origin: { kind: "human" },
@@ -106,6 +110,38 @@ describe("arefine collect", () => {
     collect(env);
 
     expect(candidateTexts("acme__widget")).toEqual(["force push しないで", "force push しないで"]);
+  });
+
+  test("返事を待っている最後の発話は、次の発話が来てから、前後のやり取りを付けて候補にする", () => {
+    const { home, env, log, repoCwd } = setup();
+    const now = new Date().toISOString();
+    appendFileSync(log, human("lint を直して", repoCwd, { at: now }));
+    expect(collect(env).candidates).toBe(0);
+
+    appendFileSync(log, `${JSON.stringify({ type: "assistant", timestamp: now, message: { content: [{ type: "text", text: "直しました" }] } })}\n`);
+    appendFileSync(log, human("テストも直して", repoCwd, { at: now }));
+    collect(env);
+
+    const candidates = readFileSync(join(home, "acme__widget", "candidates.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => Candidate.extend({ context: z.object({ after: z.string(), next: z.string().nullable() }) }).parse(JSON.parse(line)));
+    expect(candidates).toEqual([{ text: "lint を直して", context: { after: "直しました", next: "テストも直して" } }]);
+  });
+
+  test("最後の発話も、ログに 30 分書き込みがなければ、次の発話なしで候補にする", () => {
+    const { home, env, log, repoCwd } = setup();
+    const waiting = join(log, "..", "s-2.jsonl");
+    appendFileSync(log, human("31 分前の発話", repoCwd, { at: new Date(Date.now() - 31 * 60 * 1000).toISOString() }));
+    appendFileSync(waiting, human("29 分前の発話", repoCwd, { at: new Date(Date.now() - 29 * 60 * 1000).toISOString(), session: "s-2" }));
+
+    collect(env);
+
+    const candidates = readFileSync(join(home, "acme__widget", "candidates.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => Candidate.extend({ context: z.object({ next: z.string().nullable() }) }).parse(JSON.parse(line)));
+    expect(candidates).toEqual([{ text: "31 分前の発話", context: { next: null } }]);
   });
 
   test("読み込み位置の記録が壊れていたら、発話を重複して追記する前に止める", () => {

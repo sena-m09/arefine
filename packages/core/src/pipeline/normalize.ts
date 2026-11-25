@@ -176,6 +176,7 @@ function normalizeCandidate(entry: LineEntry, repo: string, llm: Llm, maxBudgetU
         summary: item.summary,
         stated_as_rule: item.stated_as_rule,
         risk_kind: item.risk_kind,
+        invocations: candidate.invocations ?? null,
         ref: { candidate: candidate.id, session: candidate.ref.session, log: candidate.ref.log },
       }),
     );
