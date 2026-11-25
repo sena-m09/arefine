@@ -368,7 +368,7 @@ function invocationsOf(events: Event[], nextBoundary: (i: number) => number): { 
   const skillDirs = new Map(
     events.flatMap(({ line }) => (line.kind === "skill-body" && line.toolUseId !== null ? [[line.toolUseId, line.dir] as const] : [])),
   );
-  return events.flatMap(({ line }, index) => {
+  const found = events.flatMap(({ line }, index): { index: number; invocation: Invocation }[] => {
     if (line.kind === "assistant") {
       return line.tools.flatMap((tool) => toolInvocation(tool, skillDirs)).map((invocation) => ({ index, invocation }));
     }
@@ -376,10 +376,21 @@ function invocationsOf(events: Event[], nextBoundary: (i: number) => number): { 
       const dir = events
         .slice(index + 1, nextBoundary(index))
         .flatMap((event) => (event.line.kind === "skill-body" && event.line.toolUseId === null ? [event.line.dir] : []))[0];
-      return dir === undefined ? [] : [{ index, invocation: { kind: "skill" as const, name: line.name, dir } }];
+      return dir === undefined ? [] : [{ index, invocation: { kind: "skill", name: line.name, dir } }];
     }
     return [];
   });
+  return found.map(({ index, invocation }, i) => ({
+    index,
+    invocation: {
+      ...invocation,
+      dir:
+        invocation.dir ??
+        found.slice(0, i).findLast(({ invocation: earlier }) => earlier.kind === invocation.kind && earlier.name === invocation.name && earlier.dir !== null)
+          ?.invocation.dir ??
+        null,
+    },
+  }));
 }
 
 function toolInvocation(tool: ToolUse, skillDirs: Map<string, string>): Invocation[] {

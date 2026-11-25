@@ -135,7 +135,7 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 - `kind`：打った発話なら `prompt`、AskUserQuestion への回答なら `answer`。`answer` の `text` は「質問: …」「回答: …」「メモ: …」の行を質問ごとにまとめたもの
 - `repo`：分からなければ `null`（そのときは `_unknown/` に入る）
 - `ref.log`：元のセッションログのパス
-- `context`：発話の前後のやり取り。前後の区切りは、人が打った発話・AskUserQuestion への回答・slash command で skill を起動した記録の3つにする
+- `context`：発話の前後のやり取り。前後の区切りは、人が打った発話（slash command を含む）と AskUserQuestion への回答にする
   - `before`：前の区切りからこの発話までの AI の出力の、末尾 700 字。考えている途中の文と API エラーの通知は含めない
   - `commands`：前の区切りからこの発話までに AI が実行しようとした Bash のコマンドの、最後の 3 件。1 件 500 字まで。結果が返っていない（人が止めた）コマンドも含める。`risk_kind` の判定で、何を止めた発話かを知るのに使う
   - `after`：この発話から次の区切りまでの AI の出力の、先頭 700 字
@@ -143,7 +143,7 @@ AskUserQuestion への回答は、ログ上ではツールの結果として記�
 - `invocations`：動いていた skill / agent。`active` は前の区切りからこの発話までに動いたもの、`recent` はセッションの初めからこの発話までに動いたものを、重複を除いて新しい順に 6 件まで
   - `kind`：`skill` か `agent`
   - `name`：skill は Skill ツールに渡した名前か slash command の名前、agent はサブエージェントの種類（指定がなければ `general-purpose`）
-  - `dir`：skill の置かれたフォルダ。どこにある skill か（リポジトリの中・ユーザー単位・プラグイン）を見分けるのに使う。agent と、ログに置き場の記録がない skill は `null`
+  - `dir`：skill の置かれたフォルダ。どこにある skill か（リポジトリの中・ユーザー単位・プラグイン）を見分けるのに使う。同じセッションで呼び直した skill はログに置き場が残らないことがあるので、前に分かった置き場を引き継ぐ。agent と、置き場が一度も分からなかった skill は `null`
 - `instructions`：この発話に返答するときに読み込まれていた指示ファイルの、パスと種別。本文は持たない。種別は Claude Code のログの値（`User`・`Project`・`Local`・`AutoMem`）か、skill なら `Skill`。最後の compact より後に読み込まれたものだけを数える。書いてあるのに守られなかった指示を、書き直すか置き場を移すかを決める材料にする
 - 前後の長さと件数（700 字・700 字・300 字、Bash 3 件・500 字、`recent` 6 件）は、ひとまずの値
 - `context`・`invocations`・`instructions` を持たない古い行もそのまま読む。保存済みの候補に後から付け直すことはしない

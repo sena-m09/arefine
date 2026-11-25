@@ -323,20 +323,31 @@ describe("arefine run", () => {
 
     run();
 
-    const invocations = {
-      active: [{ kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" }],
-      recent: [
-        { kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" },
-        { kind: "agent", name: "Explore", dir: null },
-      ],
-    };
     expect(observations().map(({ summary, invocations }) => ({ summary, invocations }))).toEqual([
       { summary: "any を使わないで", invocations: null },
-      { summary: "fetch を直接呼ばないで", invocations },
+      {
+        summary: "fetch を直接呼ばないで",
+        invocations: {
+          active: [{ kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" }],
+          recent: [
+            { kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" },
+            { kind: "agent", name: "Explore", dir: null },
+          ],
+        },
+      },
     ]);
     expect(refinerInputs().at(-1)?.observations.map(({ summary, invocations }) => ({ summary, invocations }))).toEqual([
       { summary: "any を使わないで", invocations: null },
-      { summary: "fetch を直接呼ばないで", invocations },
+      {
+        summary: "fetch を直接呼ばないで",
+        invocations: {
+          active: [{ kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" }],
+          recent: [
+            { kind: "skill", name: "build", dir: "/home/user/example/.claude/skills/build" },
+            { kind: "agent", name: "Explore", dir: null },
+          ],
+        },
+      },
     ]);
   });
 

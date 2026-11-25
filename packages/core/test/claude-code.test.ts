@@ -136,7 +136,7 @@ describe("Claude Code のセッションログ", () => {
     expect(turns.find((turn) => turn.id === "u-3")?.context.commands).toEqual(["git add -A", "git commit -m wip", push.slice(0, 500)]);
   });
 
-  test("発話の直前に動いた skill / agent と、セッションでそれまでに動いたものを新しい順に記録し、サブエージェントの中で動いたものは数えない", () => {
+  test("発話の直前に動いた skill / agent と、セッションでそれまでに動いたものを新しい順に記録し、サブエージェントの中で動いたものは数えない。呼び直した skill は前に分かった置き場を引き継ぐ", () => {
     const dir = mkdtempSync(join(tmpdir(), "arefine-log-"));
     onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
     const log = join(dir, "s-1.jsonl");
@@ -144,19 +144,19 @@ describe("Claude Code のセッションログ", () => {
     writeFileSync(
       log,
       [
-        { ...meta, type: "user", uuid: "u-1", origin: { kind: "human" }, message: { content: "issue を作って" } },
-        { type: "assistant", message: { content: [{ type: "tool_use", id: "t-1", name: "Skill", input: { skill: "issue-planner" } }] } },
+        { ...meta, type: "user", uuid: "u-1", origin: { kind: "human" }, message: { content: "変更履歴をまとめて" } },
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "t-1", name: "Skill", input: { skill: "changelog" } }] } },
         {
           type: "user",
           isMeta: true,
           sourceToolUseID: "t-1",
-          message: { content: [{ type: "text", text: "Base directory for this skill: /home/user/.claude/skills/issue-planner\n\n# issue-planner" }] },
+          message: { content: [{ type: "text", text: "Base directory for this skill: /home/user/.claude/skills/changelog\n\n# changelog" }] },
         },
         { type: "assistant", message: { content: [{ type: "tool_use", id: "t-2", name: "Agent", input: { subagent_type: "Explore" } }] } },
-        { type: "assistant", isSidechain: true, message: { content: [{ type: "tool_use", id: "t-3", name: "Skill", input: { skill: "test-write" } }] } },
-        { ...meta, type: "user", uuid: "u-2", origin: { kind: "human" }, message: { content: "番号を振り直して" } },
-        { type: "assistant", message: { content: [{ type: "tool_use", id: "t-4", name: "Agent", input: { prompt: "番号を調べて" } }] } },
-        { type: "assistant", message: { content: [{ type: "tool_use", id: "t-5", name: "Skill", input: { skill: "issue-planner" } }] } },
+        { type: "assistant", isSidechain: true, message: { content: [{ type: "tool_use", id: "t-3", name: "Skill", input: { skill: "lint-fix" } }] } },
+        { ...meta, type: "user", uuid: "u-2", origin: { kind: "human" }, message: { content: "日付順に並べて" } },
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "t-4", name: "Agent", input: { prompt: "日付を調べて" } }] } },
+        { type: "assistant", message: { content: [{ type: "tool_use", id: "t-5", name: "Skill", input: { skill: "changelog" } }] } },
         { ...meta, type: "user", uuid: "u-3", origin: { kind: "human" }, message: { content: "ありがとう" } },
       ]
         .map((record) => `${JSON.stringify(record)}\n`)
@@ -168,20 +168,20 @@ describe("Claude Code のセッションログ", () => {
     expect(turns.find((turn) => turn.id === "u-2")?.invocations).toEqual({
       active: [
         { kind: "agent", name: "Explore", dir: null },
-        { kind: "skill", name: "issue-planner", dir: "/home/user/.claude/skills/issue-planner" },
+        { kind: "skill", name: "changelog", dir: "/home/user/.claude/skills/changelog" },
       ],
       recent: [
         { kind: "agent", name: "Explore", dir: null },
-        { kind: "skill", name: "issue-planner", dir: "/home/user/.claude/skills/issue-planner" },
+        { kind: "skill", name: "changelog", dir: "/home/user/.claude/skills/changelog" },
       ],
     });
     expect(turns.find((turn) => turn.id === "u-3")?.invocations).toEqual({
       active: [
-        { kind: "skill", name: "issue-planner", dir: null },
+        { kind: "skill", name: "changelog", dir: "/home/user/.claude/skills/changelog" },
         { kind: "agent", name: "general-purpose", dir: null },
       ],
       recent: [
-        { kind: "skill", name: "issue-planner", dir: null },
+        { kind: "skill", name: "changelog", dir: "/home/user/.claude/skills/changelog" },
         { kind: "agent", name: "general-purpose", dir: null },
         { kind: "agent", name: "Explore", dir: null },
       ],
@@ -196,8 +196,8 @@ describe("Claude Code のセッションログ", () => {
     writeFileSync(
       log,
       [
-        { ...meta, type: "user", uuid: "u-1", origin: { kind: "human" }, message: { content: "レビューして" } },
-        { type: "assistant", message: { content: [{ type: "text", text: "見ます" }] } },
+        { ...meta, type: "user", uuid: "u-1", origin: { kind: "human" }, message: { content: "リリースの準備をして" } },
+        { type: "assistant", message: { content: [{ type: "text", text: "準備します" }] } },
         {
           ...meta,
           type: "user",
@@ -210,12 +210,12 @@ describe("Claude Code のセッションログ", () => {
           uuid: "u-3",
           origin: { kind: "human" },
           message: {
-            content: "<command-message>commander</command-message>\n<command-name>/commander</command-name>\n<command-args>別タブで進めて</command-args>",
+            content: "<command-message>release-notes</command-message>\n<command-name>/release-notes</command-name>\n<command-args>v2.3 の分</command-args>",
           },
         },
-        { type: "user", isMeta: true, message: { content: [{ type: "text", text: "Base directory for this skill: /home/user/.claude/skills/commander" }] } },
-        { type: "assistant", message: { content: [{ type: "text", text: "指揮役として進めます" }] } },
-        { ...meta, type: "user", uuid: "u-4", origin: { kind: "human" }, message: { content: "ワーカーを止めて" } },
+        { type: "user", isMeta: true, message: { content: [{ type: "text", text: "Base directory for this skill: /home/user/.claude/skills/release-notes" }] } },
+        { type: "assistant", message: { content: [{ type: "text", text: "リリースノートを書きます" }] } },
+        { ...meta, type: "user", uuid: "u-4", origin: { kind: "human" }, message: { content: "見出しは英語にして" } },
       ]
         .map((record) => `${JSON.stringify(record)}\n`)
         .join(""),
@@ -224,11 +224,11 @@ describe("Claude Code のセッションログ", () => {
     const turns = readSessionLog(log).turns.map((turn) => turn.utterance);
 
     expect(turns.map((turn) => turn.id)).toEqual(["u-1", "u-4"]);
-    expect(turns[0]?.context).toEqual({ before: "", commands: [], after: "見ます", next: "/commander 別タブで進めて" });
-    expect(turns[1]?.context.before).toBe("指揮役として進めます");
+    expect(turns[0]?.context).toEqual({ before: "", commands: [], after: "準備します", next: "/release-notes v2.3 の分" });
+    expect(turns[1]?.context.before).toBe("リリースノートを書きます");
     expect(turns[1]?.invocations).toEqual({
-      active: [{ kind: "skill", name: "commander", dir: "/home/user/.claude/skills/commander" }],
-      recent: [{ kind: "skill", name: "commander", dir: "/home/user/.claude/skills/commander" }],
+      active: [{ kind: "skill", name: "release-notes", dir: "/home/user/.claude/skills/release-notes" }],
+      recent: [{ kind: "skill", name: "release-notes", dir: "/home/user/.claude/skills/release-notes" }],
     });
   });
 
